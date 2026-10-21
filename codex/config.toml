@@ -1,0 +1,35 @@
+model = "gpt-6.1-sol"
+model_provider = "openai"
+model_reasoning_effort = "high"
+service_tier = "default"
+preferred_auth_method = "chatgpt"
+project_doc_fallback_filenames = ["CLAUDE.md"]
+sandbox_mode = "workspace-write"
+sandbox_permissions = ["disk-full-read-access"]
+approval_policy = "on-request"
+approvals_reviewer = "guardian_subagent"
+web_search = "cached"
+
+[agents]
+default_subagent_model = "gpt-6.1-sol"
+default_subagent_reasoning_effort = "high"
+
+[features]
+hooks = true
+goals = true
+js_repl = false
+default_mode_request_user_input = false
+memories = false
+chronicle = false
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = "75"
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "0"
+
+[memories]
+generate_memories = false
+use_memories = false

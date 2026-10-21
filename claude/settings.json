@@ -1,0 +1,155 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5-5"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git branch -d *)",
+      "Bash(git branch -D *)",
+      "Bash(gh pr create *)",
+      "Bash(codex exec:*)"
+    ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(su:*)",
+      "Bash(doas:*)",
+      "Bash(source .env:*)",
+      "Bash(. .env:*)",
+      "Bash(printenv:*)",
+      "Bash(env)",
+      "Bash(env:*)",
+      "Read(./secrets/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.config/op/**)",
+      "Read(~/.op/**)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(!.env.tpl)",
+      "Read(!.env.example)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Edit(!.env.tpl)",
+      "Edit(!.env.example)",
+      "Edit(~/.claude/state/**)",
+      "Bash(git branch -d main)",
+      "Bash(git branch -d main *)",
+      "Bash(git branch -d * main)",
+      "Bash(git branch -d * main *)",
+      "Bash(git branch -D main)",
+      "Bash(git branch -D main *)",
+      "Bash(git branch -D * main)",
+      "Bash(git branch -D * main *)",
+      "Bash(git push origin --delete main)",
+      "Bash(git push origin --delete main *)",
+      "Bash(git push origin --delete * main)",
+      "Bash(git push origin --delete * main *)"
+    ],
+    "ask": [
+      "Bash(wget:*)",
+      "Bash(nc:*)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git push * --delete *)",
+      "Bash(git push * -d *)",
+      "Bash(git push * :*)"
+    ]
+  },
+  "language": "Japanese",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/block-dangerous-commands.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/block-main-commit.py"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/enforce-package-manager.py"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/allow-git-off-main.py"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/xlsx-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/block-env-edit.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/xlsx-guard.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/xlsx-guard.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/stop-check.sh",
+            "timeout": 600
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/evidence-check.sh",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/check-reply-links.py"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/check-reply-language.py"
+          }
+        ]
+      }
+    ]
+  }
+}

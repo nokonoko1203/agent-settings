@@ -1,0 +1,143 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Summarize ~/.claude/harness-log.jsonl.
+
+Usage: harness-report [--since YYYY-MM-DD] [--repo SUBSTRING] [--log PATH]
+
+Prints Markdown tables: record counts by kind, triage/done/correction by repository and
+level, correction categories, and untriaged changes. The default window is the last 28 days.
+"""
+
+import argparse
+import json
+import os
+import re
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+
+
+def parse_detail(detail: str) -> dict[str, str]:
+    fields = {}
+    for part in detail.split(";"):
+        key, sep, value = part.strip().partition("=")
+        if sep and re.fullmatch(r"[a-z_]+", key):
+            fields[key] = value.strip()
+    return fields
+
+
+def repo_name(cwd: str) -> str:
+    return os.path.basename(cwd.rstrip("/")) or cwd
+
+
+def table(headers: list[str], rows: list[list[object]]) -> str:
+    lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
+    lines += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    default_since = (datetime.now(timezone.utc) - timedelta(days=28)).strftime("%Y-%m-%d")
+    parser.add_argument("--since", default=default_since)
+    parser.add_argument("--repo", default="")
+    parser.add_argument("--log", default=os.path.expanduser("~/.claude/harness-log.jsonl"))
+    args = parser.parse_args()
+
+    records = []
+    skipped = 0
+    with open(args.log, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                skipped += 1
+                continue
+            if rec.get("ts", "") < args.since:
+                continue
+            if args.repo and args.repo not in rec.get("cwd", ""):
+                continue
+            records.append(rec)
+
+    print(f"# harness-report（{args.since}以降、{len(records)}件）\n")
+    if skipped:
+        print(f"読めなかった行: {skipped}件\n")
+
+    print("## 記録の種類\n")
+    kinds = Counter(r.get("kind", "") for r in records)
+    print(table(["kind", "件数"], [[k, n] for k, n in kinds.most_common()]))
+
+    def level_from(fields: dict[str, str]) -> str:
+        m = re.match(r"[0-9ER]", fields.get("level", "").upper())
+        return m.group(0) if m else "?"
+
+    # task -> (repo, level). A done record wins over triage, and a later record over an earlier one.
+    triage_info: dict[str, tuple[str, str]] = {}
+    done_info: dict[str, tuple[str, str]] = {}
+    for r in records:
+        task = r.get("task", "")
+        if not task:
+            continue
+        key = (repo_name(r.get("cwd", "")), level_from(parse_detail(r.get("detail", ""))))
+        if r.get("kind") in ("triage", "triage-override"):
+            triage_info[task] = key
+        elif r.get("kind") == "done":
+            done_info[task] = key
+
+    def key_of(r: dict) -> tuple[str, str]:
+        task = r.get("task", "")
+        if task in done_info:
+            repo, level = done_info[task]
+            if level == "?" and task in triage_info:
+                level = triage_info[task][1]
+            return (repo, level)
+        if task in triage_info:
+            return triage_info[task]
+        return (repo_name(r.get("cwd", "")), level_from(parse_detail(r.get("detail", ""))))
+
+    stats: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    done_tasks: dict[tuple[str, str], set[str]] = defaultdict(set)
+    corrected_tasks: set[str] = set()
+    categories = Counter()
+    for r in records:
+        kind = r.get("kind")
+        task = r.get("task", "")
+        if kind == "triage":
+            stats[(repo_name(r.get("cwd", "")), level_from(parse_detail(r.get("detail", ""))))]["triage"] += 1
+        elif kind == "done":
+            key = key_of(r)
+            stats[key]["done"] += 1
+            if task:
+                done_tasks[key].add(task)
+        elif kind == "correction":
+            categories[parse_detail(r.get("detail", "")).get("category", "未分類")] += 1
+            key = key_of(r) if task else (repo_name(r.get("cwd", "")), "taskなし")
+            stats[key]["correction"] += 1
+            if task:
+                corrected_tasks.add(task)
+
+    print("\n## リポジトリとレベルごとの結果\n")
+    print("「指摘された完了」は、taskの付いた完了のうち、同じtaskに指摘があったものの数。\n")
+    rows = []
+    for key in sorted(stats):
+        c = stats[key]
+        tasks = done_tasks.get(key, set())
+        hit = len(tasks & corrected_tasks)
+        ratio = f"{hit}/{len(tasks)}（{hit / len(tasks):.0%}）" if tasks else "-"
+        rows.append([key[0], key[1], c["triage"], c["done"], c["correction"], ratio])
+    print(table(["リポジトリ", "レベル", "判定", "完了", "指摘", "指摘された完了"], rows))
+
+    print("\n## 指摘の分類\n")
+    print(table(["分類", "件数"], [[k, n] for k, n in categories.most_common()]) if categories else "なし")
+
+    print("\n## triageなしの変更\n")
+    untriaged = Counter(repo_name(r.get("cwd", "")) for r in records if r.get("kind") == "untriaged-change")
+    print(table(["リポジトリ", "件数"], [[k, n] for k, n in untriaged.most_common()]) if untriaged else "なし")
+
+
+if __name__ == "__main__":
+    main()

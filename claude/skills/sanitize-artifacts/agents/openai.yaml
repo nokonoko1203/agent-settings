@@ -1,0 +1,5 @@
+interface:
+  display_name: Sanitize Artifacts
+  short_description: Removes conversation-dependent wording from implementation outputs.
+  icon: 🧹
+  color: blue

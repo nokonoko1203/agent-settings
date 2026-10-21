@@ -1,0 +1,26 @@
+#!/bin/bash
+# Append one record to ~/.claude/harness-log.jsonl.
+#
+# Usage:
+#   harness-log <kind> <task> <detail>
+#
+# kind: triage, triage-override, done, correction, manual
+# task: the task ID (<YYYYMMDD-HHMM>-<name>), or "" when unknown
+# cwd is the repository root (git rev-parse --show-toplevel), or the working directory outside git.
+set -euo pipefail
+
+if [ $# -ne 3 ]; then
+  echo "usage: harness-log <kind> <task> <detail>" >&2
+  exit 2
+fi
+
+HARNESS_LOG="${HARNESS_LOG:-$HOME/.claude/harness-log.jsonl}"
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+jq -cn \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg kind "$1" \
+  --arg cwd "$root" \
+  --arg task "$2" \
+  --arg detail "$3" \
+  '{ts: $ts, kind: $kind, cwd: $cwd, task: $task, detail: $detail}' >>"$HARNESS_LOG"

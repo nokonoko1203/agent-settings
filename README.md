@@ -1,230 +1,144 @@
-# Claude Code Settings Best Practices
+# Claude CodeとCodexの個人設定集
 
-English | [日本語](./README_ja.md)
+軽い設定を勧めていた旧版は、タグ`v1`にあります。エージェントに任せる範囲が広がり、作業の重さの判断・hook・証拠・レビューで品質を担保する仕組みが必要になったため、方針を変えました。
 
-A repository collecting best practices for Claude Code settings and customization. We will continue to update and improve this repository to make it even better.
+Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめています。`claude/`と`codex/`は同じ開発フローとスキルセットで揃えており、`codex/AGENTS.md`は`claude/CLAUDE.md`と同じ内容です。
 
-**Note:** Some settings in this repository are specifically configured for Japanese users. Please use LLM to translate and adapt them appropriately to your environment.
+## 開発フロー
 
-The configuration files in this repository are designed to be placed under `~/.claude/` directory. By placing these configuration files in the appropriate locations, you can customize Claude Code's behavior and build an efficient development environment.
+1. 作業の前に重さ（E/0/1/2/R）を決めて`harness-log triage`で記録する。マイグレーション・認可・公開API・データ削除・課金・本番反映はレベル2以上。
+2. 調査は`imozuru`・`research`、既存コードの理解は`how`・`why`。
+3. 動かさないと分からない実装は`spike-rebuild`で、試作して捨ててから作り直す。
+4. 設計は`spec`で、受け入れ条件に`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
+5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。ゴール・完了条件・範囲・背景・出力・止まる条件をまとめた指示書はClaude Code（Opus）に書かせる。Solの報告だけで完了とせず、差分とテスト結果はClaude Codeが自分で確かめる。
+6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
+7. コード変更後は`reviewer`サブエージェントでレビューし、PRを作る。マージは人が行う。
+8. 指摘は`harness-log correction`で記録し、同じ間違いが続いたら`correct`で再発を防ぐ。記録は`harness-report`で集計する。
 
-## Approach
+詳細は[claude/CLAUDE.md](./claude/CLAUDE.md)を参照してください。
 
-Models are powerful enough now that complex configuration is unnecessary. Over-configuring can actually be counterproductive. This repository focuses on a few high-impact areas only.
+## 構成
 
-- Claude Code has a rich set of slash commands. Master these first — add custom configuration later.
-    - /resume, /rewind, /fork, /copy: Resume, restore, branch, and copy conversations
-    - /review: Review pull requests
-    - /simplify: Review and fix changed code
-    - /copy: Copy session contents to clipboard
-    - /add-dir: Add directories to the search scope
-    - /batch: Create multiple PRs for large-scale changes using git worktrees
-    - /plan: Run in plan mode
-- Agent Teams let you distribute tasks across multiple agents working in parallel. By separating roles such as design, review, implementation, and testing, you can tackle large-scale tasks efficiently.
-- Enable official plugins. The LSP plugins `typescript-lsp`, `pyright-lsp`, and `rust-analyzer-lsp` provide accurate code navigation without extra token cost.
-- In some cases, prefer CLI tools over MCP. MCP servers consume context on every call. CLI tools can accomplish the same tasks with far fewer tokens. For example, replacing Playwright MCP with Playwright CLI.
-
-## Project Structure
-
-```
-claude-code-settings/
-├── CLAUDE.md          # Global user guidelines for ~/.claude/ placement
-├── LICENSE            # MIT License file
-├── README.md          # This file (English)
-├── README_ja.md       # Japanese version
-├── settings.json      # Claude Code configuration file
-├── skills/            # Skill definitions
-│   ├── kill-dev-process/
-│   │   └── SKILL.md   # Dev process cleanup skill
-│   └── playwright-cli/
-│       ├── SKILL.md   # Browser automation via Playwright CLI (token-efficient)
-│       └── references/ # Detailed reference docs
-└── symlinks/          # External tools config files as symbolic links
-    └── claude.json    # Claude Code MCP server configuration template
-```
-
-## About the symlinks Folder
-
-The `symlinks/` folder contains configuration files for various external tools related to Claude Code. Since Claude Code is frequently updated and configuration changes are common, having all configuration files centralized in one folder makes editing much easier. Even if related files are normally placed outside the `~/.claude/` directory, it's convenient to place them here as symbolic links for unified management.
-
-In actual environments, these files are placed as symbolic links in specified locations.
-
-```bash
-# Link Claude Code configuration
-ln -s /path/to/settings.json ~/.claude/settings.json
+```text
+.
+├── README.md
+├── LICENSE
+├── MANIFEST.txt
+├── claude/                 # ~/.claude/ に展開する
+│   ├── CLAUDE.md
+│   ├── settings.json       # hook・権限・環境変数
+│   ├── agents/             # reviewer
+│   ├── bin/                # harness-log, harness-report
+│   ├── hooks/
+│   ├── references/         # evidence.mdの形式など
+│   ├── rules/
+│   └── skills/
+└── codex/                  # ~/.codex/ に展開する
+    ├── AGENTS.md
+    ├── config.toml
+    ├── hooks.json
+    ├── hooks/
+    ├── rules/
+    └── skills/
 ```
 
-This allows configuration changes to be managed in the repository and shared across multiple environments.
+詳細なファイル一覧は[MANIFEST.txt](./MANIFEST.txt)を参照してください。
 
-## Key Features
+## 必要なツール
 
-### 1. Skills
+| ツール | 用途 |
+|---|---|
+| `uv` | `harness-report`の実行 |
+| `python3` | Python製hookの実行 |
+| `jq` | hookでのJSON処理 |
+| `make` | `stop-check.sh`が`make check`を実行する |
+| `shasum` | `stop-check.sh`・`evidence-check.sh`の状態管理（Linuxでは`perl`の`shasum`が必要な場合がある） |
+| `git`、`gh` | ブランチ保護のhook、PR作成 |
+| `codex` | `codex`スキル（Claude CodeからCodexに作業を頼む） |
+| `op`（1Password CLI） | シークレットの注入（`rules/secrets-1password.md`） |
+| `ctx7` | Context7でライブラリの最新仕様を確かめる。npmパッケージ`ctx7`で、`bunx ctx7 library <name> <query>`のように実行できる。CLAUDE.mdは`ctx7`コマンドで呼ぶので、PATHの通る場所に`bunx ctx7 "$@"`を実行するラッパーを置くか、各自インストールする |
 
-This repository provides skills to enhance Claude Code's capabilities:
+## 使い方
 
-**Skills** - User-invocable commands for common tasks:
-- Dev process cleanup
-- Token-efficient browser automation via Playwright CLI
+`claude/`の中身を`~/.claude/`に、`codex/`の中身を`~/.codex/`に配置します。以下は、このリポジトリのルートで実行する例です。既存の設定があれば、先にバックアップを取ります。
 
-### 2. Interactive Development Workflow
-
-Rules defined in CLAUDE.md promote interactive development with Claude Code:
-- Follow the order: research → plan → approval → implement. No code before approval.
-- Write research findings and plans as markdown in `.tmp` so the user can review and annotate
-- Use **AskUserQuestion** to support user decision-making
-- **Always launch the task management system** when tasks arise to organize details clearly
-
-### 3. Efficient Development Rules
-
-- **Leverage Context7 MCP**: Always reference the latest library information
-- **Token-efficient browser automation**: Use Playwright CLI instead of MCP for ~4x token reduction
-- **LSP for code investigation**: Accurate code navigation and analysis
-
-### 4. Team Workflow
-
-Agent teams follow a structured formation:
-- **Lead + Reviewer**: Claude Code agents handling design and review
-- **Implementer + Tester**: Claude Code agents for implementation and testing
-
-This separation of concerns ensures quality through independent review and implementation roles.
-
-## File Details
-
-### CLAUDE.md
-
-Defines global user guidelines. Contains the following content:
-
-- **Top-Level Rules**: Basic operational rules including MCP usage, testing requirements, and team workflows
-- Always use Context7 MCP for library information
-- Use LSP for accurate code navigation and analysis
-- Verify frontend functionality with Playwright CLI (`playwright-cli` via Bash)
-- Use `playwright-cli console` and `playwright-cli network` for console logs and network requests
-- Do not write code before approval. Follow the order: research → plan → approval → implement
-- Write research findings and plans as markdown in `.tmp` — never report only verbally
-- Address all user annotations on plans and do not implement until explicitly told to
-- Use AskUserQuestion for decision-making
-- Respond critically without pandering, but not forcefully
-- Always launch the task management system for tasks
-- Team formation: Lead + Reviewer (Claude Code agents) and Implementer + Tester (Claude Code agents)
-
-### settings.json
-
-Configuration file that controls Claude Code behavior:
-
-#### Environment Variable Configuration (`env`)
-```json
-{
-  "DISABLE_TELEMETRY": "1",                         // Disable telemetry
-  "DISABLE_ERROR_REPORTING": "1",                   // Disable error reporting
-  "DISABLE_BUG_COMMAND": "1",                       // Disable bug command
-  "API_TIMEOUT_MS": "600000",                       // API timeout (10 minutes)
-  "DISABLE_AUTOUPDATER": "0",                       // Auto-updater setting
-  "CLAUDE_CODE_ENABLE_TELEMETRY": "0",              // Claude Code telemetry
-  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",  // Disable non-essential traffic
-  "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"       // Enable experimental agent teams
-}
+```sh
+cp -a ~/.claude ~/.claude.backup.$(date +%Y%m%d%H%M%S)
+cp -a ~/.codex ~/.codex.backup.$(date +%Y%m%d%H%M%S)
 ```
 
-#### Permission Configuration (`permissions`)
+まだ存在しないディレクトリのバックアップは不要です。設定先を作り、設定ファイル以外をコピーします。
 
-Designed for Bypass mode operation — no allowlist is configured. Only a deny list provides minimal safety guards.
-
-**deny (blocklist)**:
-- Dangerous commands: `sudo`, `rm`, `rm -rf`
-- Git operations: `git push`, `git reset`, `git rebase`, `git rm`, `git clean`
-- Network operations: `curl`, `wget`, `nc`
-
-#### Hook Configuration (`hooks`)
-
-**Notification** (Notification settings - macOS)
-- Display notifications with custom messages and titles using macOS notification system
-
-#### MCP Server Activation (`enabledMcpjsonServers`)
-
-Controls which MCP servers defined in project-level `.mcp.json` files are activated.
-
-- **context7** - Up-to-date documentation and code examples for libraries
-
-#### Additional Configuration
-- `cleanupPeriodDays`: 20 - Cleanup period for old data
-- `enableAllProjectMcpServers`: true - Enable all project-specific MCP servers
-- `language`: "Japanese" - Interface language
-- `alwaysThinkingEnabled`: true - Always show thinking process
-- `enabledPlugins`: LSP plugins for enhanced code intelligence (rust-analyzer, typescript, pyright)
-
-### Official Plugins
-
-Claude Code provides official LSP (Language Server Protocol) plugins for enhanced code intelligence. These are configured in `settings.json` under `enabledPlugins`.
-
-| Plugin              | Description                                           |
-| ------------------- | ----------------------------------------------------- |
-| `rust-analyzer-lsp` | Rust language server for code navigation and analysis |
-| `typescript-lsp`    | TypeScript/JavaScript language server                 |
-| `pyright-lsp`       | Python language server for type checking and analysis |
-
-### Skills (skills/)
-
-Skills are user-invocable commands that can be called directly using the `/skill-name` syntax.
-
-| Skill               | Description                                                                     |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `/kill-dev-process` | Kill orphaned dev servers, browsers, and port-hogging processes                 |
-| `/playwright-cli`   | Token-efficient browser automation via Playwright CLI (replaces Playwright MCP) |
-
-## Quick Install (curl)
-
-You can quickly download and set up the configuration files using curl without cloning the repository.
-
-> **WARNING: This will overwrite existing files!**
->
-> If you have already customized files such as `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, or any files in `~/.claude/skills/`, **they will be overwritten and your custom settings will be lost**.
->
-> **Before running these commands:**
-> 1. Back up your existing `~/.claude/` directory: `cp -r ~/.claude ~/.claude.backup`
-> 2. Or selectively download only the files you need
-
-### Download All Files
-
-```bash
-# Create necessary directories
-mkdir -p ~/.claude/skills/{kill-dev-process,playwright-cli}
-
-# Download main configuration files
-curl -o ~/.claude/CLAUDE.md \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/CLAUDE.md
-curl -o ~/.claude/settings.json \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/settings.json
-
-# Download skills
-curl -o ~/.claude/skills/kill-dev-process/SKILL.md \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/skills/kill-dev-process/SKILL.md
-curl -o ~/.claude/skills/playwright-cli/SKILL.md \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/skills/playwright-cli/SKILL.md
+```sh
+mkdir -p ~/.claude ~/.codex
+rsync -a --exclude settings.json claude/ ~/.claude/
+rsync -a --exclude config.toml codex/ ~/.codex/
+chmod +x ~/.claude/bin/* ~/.claude/hooks/*
 ```
 
-### Download Individual Files
+`claude/settings.json`と`codex/config.toml`には、hook・権限・モデルなどの設定が入っています。
 
-If you only want specific files, you can download them individually:
+- 初めて使う場合は、それぞれ`~/.claude/settings.json`と`~/.codex/config.toml`へコピーします。
+- 既存の設定がある場合は、内容を比較して必要な設定を取り込みます。通知、テーマ、プラグイン、MCPサーバー、信頼するプロジェクトなどの設定は、自分の環境に合わせて残します。
+- `codex/config.toml`のモデルが使えない環境では、`model`と`default_subagent_model`を利用できるモデルへ変更します。
 
-```bash
-# Example: Download only the CLAUDE.md
-mkdir -p ~/.claude
-curl -o ~/.claude/CLAUDE.md \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/CLAUDE.md
+`rsync`は古いファイルを削除しません。以前の設定から更新する場合は、不要になったファイルが残っていないか確認してください。
 
-# Example: Download only a specific skill
-mkdir -p ~/.claude/skills/kill-dev-process
-curl -o ~/.claude/skills/kill-dev-process/SKILL.md \
-  https://raw.githubusercontent.com/nokonoko1203/claude-code-settings/main/skills/kill-dev-process/SKILL.md
+## hook
+
+| イベント | hook | 内容 |
+|---|---|---|
+| PreToolUse（Bash） | `block-dangerous-commands.sh` | `rm -rf`などの取り返しのつかないコマンドを止める |
+| PreToolUse（Bash） | `block-main-commit.py` | mainへの直接コミットを止める |
+| PreToolUse（Bash） | `allow-git-off-main.py` | main以外のブランチでのgit操作を自動で許可する |
+| PreToolUse（Bash） | `enforce-package-manager.py` | ロックファイルと違うパッケージマネージャーを止める（ロックファイルがなければbun・uv） |
+| PreToolUse・PostToolUse（Bash） | `xlsx-guard.py` | コマンドが書き換えた.xlsxを検証する |
+| PreToolUse（Edit・Write） | `block-env-edit.sh` | `.env`の作成・編集を止める |
+| Stop | `stop-check.sh` | `make check`を実行し、落ちたら直させる（3回まで） |
+| Stop | `evidence-check.sh` | 振る舞いが変わる変更なのに証拠が古ければ止める（既定で見るのはSvelte・CSSなど。ほかの言語はリポジトリの`.claude/evidence-paths`で対象を指定する） |
+| Stop | `check-reply-links.py` | 返信中のファイルリンクが開けるか確かめる |
+| Stop | `check-reply-language.py` | 返信が英語なら日本語で書き直させる |
+
+Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、環境変数の出力（`env`、`printenv`）、`source .env`、`./.env`・`./secrets/`・`~/.ssh/`などのパスを含むコマンドを止めます。コマンドの文字列で判定するだけなので、`cat .env`のような書き方は止まりません。
+
+## スキル
+
+`claude/skills/`と`codex/skills/`には同じスキルセットを入れています。
+
+| 段階 | スキル | 内容 |
+|---|---|---|
+| 進め方 | `playbook` | 不具合の修正・機能の追加・リファクタリング・性能の改善・調査の手順書 |
+| 調査 | `imozuru` | 関連する用語・人・場を芋づる式にたどり、原文を集める |
+| 調査 | `research` | 技術選定や仕様比較を根拠付きで`.tmp/research/`にまとめる |
+| 調査 | `how` | 既存のコードが今どう動いているかを説明する |
+| 調査 | `why` | 既存のコードや設計がなぜ今の形なのかを、記録から調べる |
+| 設計 | `spec` | 受け入れ条件と確かめ方を決めた契約・仕様書を作る |
+| 設計 | `spike-rebuild` | 試作して測り、仕様を作ってから作り直す |
+| 実装 | `codex` | Codex CLIに、モデル・effortを指定して作業を頼む |
+| レビュー | `code-reviewer` | PR・差分を、再現条件と根拠のある不具合に絞ってレビューする |
+| 保守運用 | `harness-init` | リポジトリに`make check`・CI・AGENTS.mdを整える |
+| 保守運用 | `create-verification-skill` | アプリを利用者と同じ操作で確かめる、プロジェクト専用の検証スキルを作る |
+| 保守運用 | `maintain-verification-skill` | 検証スキルと機能一覧を、アプリの現状に合わせて点検する |
+| 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
+| 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
+| 文書 | `yomiyasu` | AIが生成した日本語を推敲する |
+
+## 更新
+
+設定やスキルを更新したら、マニフェストを再生成します。
+
+```sh
+find . -type f \
+  -not -path './.git/*' \
+  -not -path './.tmp/*' \
+  -not -name '.DS_Store' \
+  | sort > MANIFEST.txt
 ```
 
-## References
+`claude/skills/`と`codex/skills/`は同じスキルセットになるように更新してください。
 
-- [Claude Code overview](https://docs.anthropic.com/en/docs/claude-code)
-- [Model Context Protocol (MCP)](https://docs.anthropic.com/en/docs/mcp)
-- [Context7](https://context7.com/)
-- [Playwright CLI](https://www.npmjs.com/package/@playwright/cli)
+## ライセンス
 
-## License
+このリポジトリは[MITライセンス](./LICENSE)です。Copyright (c) 2025 nokonoko1203。
 
-This project is released under the MIT License.
+一部のスキルは第三者のMITライセンスのコードを含みます。帰属表示とライセンス条件は、各スキル内の`NOTICE.md`（`NOTICE-pstack.md`を含む）や`LICENSE`を参照してください。Unicode由来のデータについては、同梱の`UNICODE-LICENSE.txt`も参照してください。
