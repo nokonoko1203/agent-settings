@@ -1,0 +1,93 @@
+# Allowed without prompt.
+prefix_rule(
+    pattern = ["ctx7", "library"],
+    decision = "allow",
+    justification = "Context7 library resolution is trusted for documentation lookup.",
+)
+
+prefix_rule(
+    pattern = ["ctx7", "docs"],
+    decision = "allow",
+    justification = "Context7 docs lookup is trusted for documentation lookup.",
+)
+
+prefix_rule(
+    pattern = ["git", "switch"],
+    decision = "allow",
+    justification = "Branch switching and creation via git switch are allowed.",
+)
+
+prefix_rule(
+    pattern = ["git", "add"],
+    decision = "allow",
+    justification = "Staging files with git add is allowed.",
+)
+
+prefix_rule(
+    pattern = ["git", "commit", "-m"],
+    decision = "allow",
+    justification = "Non-interactive git commits with an explicit message are allowed.",
+)
+
+prefix_rule(
+    pattern = ["git", "commit", "--message"],
+    decision = "allow",
+    justification = "Non-interactive git commits with an explicit message are allowed.",
+)
+
+prefix_rule(
+    pattern = ["bun", "run"],
+    decision = "allow",
+    justification = "Allow running the project scripts with bun run.",
+)
+
+prefix_rule(
+    pattern = ["gh", "auth", "status"],
+    decision = "allow",
+    justification = "GitHub CLI auth checks need access to the user's keyring in automation runs.",
+)
+
+prefix_rule(
+    pattern = ["gh", "api", "graphql"],
+    decision = "allow",
+    justification = "GitHub Project v2 automation uses GraphQL and needs the user's keyring token.",
+)
+
+# Require prompt.
+prefix_rule(
+    pattern = ["curl"],
+    decision = "prompt",
+    justification = "External fetches should be reviewed.",
+)
+
+prefix_rule(
+    pattern = ["wget"],
+    decision = "prompt",
+    justification = "External fetches should be reviewed.",
+)
+
+prefix_rule(
+    pattern = ["nc"],
+    decision = "prompt",
+    justification = "Network socket commands should be reviewed.",
+)
+
+# Forbidden.
+prefix_rule(
+    pattern = ["sudo"],
+    decision = "forbidden",
+    justification = "Privileged commands must be run manually outside Codex.",
+)
+
+prefix_rule(
+    pattern = ["su"],
+    decision = "forbidden",
+    justification = "Privileged commands must be run manually outside Codex.",
+)
+
+prefix_rule(
+    pattern = ["doas"],
+    decision = "forbidden",
+    justification = "Privileged commands must be run manually outside Codex.",
+)
+prefix_rule(pattern=["make", "check"], decision="allow")
