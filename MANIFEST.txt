@@ -1,7 +1,6 @@
 ./MANIFEST.txt
 ./README.md
 ./claude/CLAUDE.md
-./claude/agents/reviewer.md
 ./claude/bin/harness-log
 ./claude/bin/harness-report
 ./claude/hooks/allow-git-off-main.py

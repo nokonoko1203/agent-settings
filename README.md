@@ -12,7 +12,7 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 4. 設計は`spec`で、受け入れ条件に`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
 5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。ゴール・完了条件・範囲・背景・出力・止まる条件をまとめた指示書はClaude Code（Opus）に書かせる。Solの報告だけで完了とせず、差分とテスト結果はClaude Codeが自分で確かめる。
 6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
-7. コード変更後は`reviewer`サブエージェントでレビューし、PRを作る。マージは人が行う。
+7. コード変更後は`code-reviewer`スキルでレビューし、PRを作る。Claude Codeでは、Codex（Sol）にも別にレビューさせ、指摘をコードで確かめて統合する。マージは人が行う。
 8. 指摘は`harness-log correction`で記録し、同じ間違いが続いたら`correct`で再発を防ぐ。記録は`harness-report`で集計する。
 
 詳細は[claude/CLAUDE.md](./claude/CLAUDE.md)を参照してください。
@@ -27,7 +27,6 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 ├── claude/                 # ~/.claude/ に展開する
 │   ├── CLAUDE.md
 │   ├── settings.json       # hook・権限・環境変数
-│   ├── agents/             # reviewer
 │   ├── bin/                # harness-log, harness-report
 │   ├── hooks/
 │   ├── references/         # evidence.mdの形式など
