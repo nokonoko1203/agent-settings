@@ -180,6 +180,7 @@ Claude Codeは両方を読みます。リポジトリの設定が手元の設定
 find . -type f \
   -not -path './.git/*' \
   -not -path './.tmp/*' \
+  -not -path './.claude/*' \
   -not -name '.DS_Store' \
   | sort > MANIFEST.txt
 ```
