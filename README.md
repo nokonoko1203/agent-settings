@@ -1,8 +1,8 @@
-# Claude CodeとCodexの個人設定集
+# Team Agent Settings
 
-軽い設定を勧めていた旧版は、タグ`v1`にあります。エージェントに任せる範囲が広がり、作業の重さの判断・hook・証拠・レビューで品質を担保する仕組みが必要になったため、方針を変えました。
+Claude Codeで使うチーム共有用の設定、ルール、hook、スキルをまとめたリポジトリです。
 
-Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめています。`claude/`と`codex/`は同じ開発フローとスキルセットで揃えており、`codex/AGENTS.md`は`claude/CLAUDE.md`と同じ内容です。
+Codexは、Claude Codeから`codex`スキルで作業を頼む先として使います。`codex/`には、頼まれたCodexに必要な最小限だけを入れています。中身は、頼まれた側向けの短い規則（`AGENTS.md`）、危険なコマンドを止めるhook、最小限の`config.toml`です。スキルはClaude Code側だけにあります。
 
 ## 開発フロー
 
@@ -10,7 +10,7 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 2. 調査は`imozuru`・`research`、既存コードの理解は`how`・`why`。
 3. 動かさないと分からない実装は`spike-rebuild`で、試作して捨ててから作り直す。
 4. 設計は`spec`で、受け入れ条件に`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
-5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。ゴール・完了条件・範囲・背景・出力・止まる条件をまとめた指示書はClaude Code（Opus）に書かせる。Solの報告だけで完了とせず、差分とテスト結果はClaude Codeが自分で確かめる。
+5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。運用してみた実感として、Solはトークン消費が軽く、丁寧な指示によく従う。そこで、手間のかかる指示書（ゴール・完了条件・範囲・背景・出力・止まる条件）はClaude Code（Opus）に書かせる。Solの報告は証拠ではないので、差分とテスト結果はClaude Codeが自分で確かめる。
 6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
 7. コード変更後は`code-reviewer`スキルでレビューし、PRを作る。Claude Codeでは、Codex（Sol）にも別にレビューさせ、指摘をコードで確かめて統合する。マージは人が行う。
 8. 指摘は`harness-log correction`で記録し、同じ間違いが続いたら`correct`で再発を防ぐ。記録は`harness-report`で集計する。
@@ -22,14 +22,13 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 ```text
 .
 ├── README.md
-├── LICENSE
 ├── MANIFEST.txt
 ├── claude/                 # ~/.claude/ に展開する
 │   ├── CLAUDE.md
 │   ├── settings.json       # hook・権限・環境変数
-│   ├── bin/                # harness-log, harness-report
+│   ├── bin/                # harness-log, harness-report, harness-install, verify-map, e2e-inventory-sveltekit.ts
 │   ├── hooks/
-│   ├── references/         # evidence.mdの形式など
+│   ├── references/         # evidence.mdの形式、機能一覧の確認手段の書き方など
 │   ├── rules/
 │   └── skills/
 └── codex/                  # ~/.codex/ に展開する
@@ -37,8 +36,7 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
     ├── config.toml
     ├── hooks.json
     ├── hooks/
-    ├── rules/
-    └── skills/
+    └── rules/
 ```
 
 詳細なファイル一覧は[MANIFEST.txt](./MANIFEST.txt)を参照してください。
@@ -47,8 +45,9 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 
 | ツール | 用途 |
 |---|---|
-| `uv` | `harness-report`の実行 |
-| `python3` | Python製hookの実行 |
+| `uv` | `harness-report`・`harness-install`の実行 |
+| `python3` | Python製hookと`verify-map`の実行 |
+| `bun` | `e2e-inventory-sveltekit.ts`（SvelteKitのe2eの確認対象の抽出）の実行。対象のプロジェクトの`svelte`と`typescript`を使う |
 | `jq` | hookでのJSON処理 |
 | `make` | `stop-check.sh`が`make check`を実行する |
 | `shasum` | `stop-check.sh`・`evidence-check.sh`の状態管理（Linuxでは`perl`の`shasum`が必要な場合がある） |
@@ -59,29 +58,36 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 
 ## 使い方
 
-`claude/`の中身を`~/.claude/`に、`codex/`の中身を`~/.codex/`に配置します。以下は、このリポジトリのルートで実行する例です。既存の設定があれば、先にバックアップを取ります。
+既存の`~/.claude`や`~/.codex`に上書きする前に、バックアップを取ってください。
 
 ```sh
 cp -a ~/.claude ~/.claude.backup.$(date +%Y%m%d%H%M%S)
 cp -a ~/.codex ~/.codex.backup.$(date +%Y%m%d%H%M%S)
 ```
 
-まだ存在しないディレクトリのバックアップは不要です。設定先を作り、設定ファイル以外をコピーします。
+設定を反映します。`settings.json`と`config.toml`は個人の設定を消さないよう、ここでは除外します。
 
 ```sh
-mkdir -p ~/.claude ~/.codex
 rsync -a --exclude settings.json claude/ ~/.claude/
 rsync -a --exclude config.toml codex/ ~/.codex/
 chmod +x ~/.claude/bin/* ~/.claude/hooks/*
 ```
 
-`claude/settings.json`と`codex/config.toml`には、hook・権限・モデルなどの設定が入っています。
+`claude/settings.json`は、hook・権限など共通の部分だけを入れています。`codex/config.toml`は、hookを有効にする設定、プロジェクトのCLAUDE.mdを読む設定、メモリーを切る設定、シェルに渡す環境変数を基本のものに絞る設定だけです。Codexのモデル、effort、サンドボックスは、`codex`スキルが毎回指定します。
 
-- 初めて使う場合は、それぞれ`~/.claude/settings.json`と`~/.codex/config.toml`へコピーします。
-- 既存の設定がある場合は、内容を比較して必要な設定を取り込みます。通知、テーマ、プラグイン、MCPサーバー、信頼するプロジェクトなどの設定は、自分の環境に合わせて残します。
-- `codex/config.toml`のモデルが使えない環境では、`model`と`default_subagent_model`を利用できるモデルへ変更します。
+- 初めて使う場合（`~/.claude/settings.json`や`~/.codex/config.toml`がない場合）は、そのままコピーします。
+- 既存の設定がある場合は、上書きせずに`hooks`・`permissions`・`env`などの差分を取り込みます。`settings.json`は次のように`jq`でマージできます（配列は共有版で置き換わるので、マージ後に中身を確かめてください）。
 
-`rsync`は古いファイルを削除しません。以前の設定から更新する場合は、不要になったファイルが残っていないか確認してください。
+```sh
+jq -s '.[0] * .[1]' ~/.claude/settings.json claude/settings.json > /tmp/settings.json \
+  && mv /tmp/settings.json ~/.claude/settings.json
+```
+
+通知、テーマ、プラグイン、MCPサーバー、信頼するプロジェクトなどの個人の設定は、各自の設定に残してください。
+
+以前の共有版から更新する場合、`rsync`は古いファイルを消しません。今回の版で外したスキル（`tdd`、`implement`、`playwright-cli`、`git-worktree`など）と`~/.codex/CLAUDE.md`は、不要なら手で削除してください。Codexのスキル（`~/.codex/skills/`の下）も、今の版では入れていません。不要なら手で削除してください。
+
+`codex/AGENTS.md`は、以前の版と違って`claude/CLAUDE.md`の写しではありません。`~/.codex/AGENTS.md`を`~/.claude/CLAUDE.md`へのシンボリックリンクにしている場合、`rsync`で上書きされます。
 
 ## hook
 
@@ -102,7 +108,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 
 ## スキル
 
-`claude/skills/`と`codex/skills/`には同じスキルセットを入れています。
+スキルは`claude/skills/`にあります。Codexには入れていません。
 
 | 段階 | スキル | 内容 |
 |---|---|---|
@@ -118,26 +124,63 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 保守運用 | `harness-init` | リポジトリに`make check`・CI・AGENTS.mdを整える |
 | 保守運用 | `create-verification-skill` | アプリを利用者と同じ操作で確かめる、プロジェクト専用の検証スキルを作る |
 | 保守運用 | `maintain-verification-skill` | 検証スキルと機能一覧を、アプリの現状に合わせて点検する |
+| 保守運用 | `create-e2e-ci` | 外部との境界をモックに向けたe2eテストと、監査・型検査・テスト・e2eを動かすCIを作る |
+| 保守運用 | `write-e2e-case` | AIが画面を操作して確かめた手順から、e2eのケースを書き起こす。落ちたケースは、意図した画面の変更による操作の壊れなら直し、製品の退行や期待する結果の失敗なら報告する |
+| 保守運用 | `create-preview-env` | PRごとのプレビュー環境（Cloudflare WorkersかAmplify）と、社内だけが開けるアクセス制限を作る |
 | 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
 | 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
 | 文書 | `yomiyasu` | AIが生成した日本語を推敲する |
 
+## プロジェクトのリポジトリに入れる
+
+クラウドセッション（claude.ai/code）は`~/.claude/`を読みません。クラウドや他のメンバーの手元でも同じハーネスを使うには、プロジェクトのリポジトリの`.claude/`に写します。
+
+```sh
+<このリポジトリのクローン>/claude/bin/harness-install <リポジトリのパス>
+```
+
+プロジェクトのリポジトリのルートで実行するときは、パスに`.`を渡します。サブディレクトリで実行しても、`.claude/`はgitのルートにできます。入ったファイルを確かめてからコミットします。
+
+```sh
+cd <プロジェクトのリポジトリ>
+<このリポジトリのクローン>/claude/bin/harness-install .
+git add .claude
+git commit -m "chore: エージェントのハーネスを入れる"
+```
+
+コピー元は、このリポジトリのクローンでgitが追跡しているファイルだけです。`~/.claude/`から実行すると、個人のスキルなどが混ざらないよう、何もせずに終わります。
+
+- 規則（`CLAUDE.md`）は`.claude/rules/harness.md`に、スキル、hook、`bin/`、`references/`はそれぞれ`.claude/`の下に入ります
+- 入るhookは、危険なコマンド、mainへのコミット、`.env`の編集を止めるもの、パッケージマネージャーの確認、`stop-check.sh`、`evidence-check.sh`です。返信のリンク・言語の確認と`xlsx-guard.py`は個人の環境向けなので入りません
+- `.claude/settings.json`の既存のキーとhookは残ります
+- もう一度実行すると、設定集の更新に合わせて同期します。設定集から消えたファイルは消えます
+- `.claude/harness-version`のあるリポジトリでは、グローバルの同じhookは`run-global.sh`が止めるので、二重には動きません
+- コミットはしません。上の例のように、自分でコミットしてください
+- 以前の版から更新した場合、手元の`~/.claude/settings.json`は「使い方」の手順では上書きされません。`claude/settings.json`と比べ、上の7つのhookのコマンドを`~/.claude/hooks/run-global.sh <hookのファイル名>`に書き換えてください。書き換えないと、ハーネスを入れたリポジトリでhookが2回動きます
+
+### 手元の`~/.claude/`とリポジトリの`.claude/`の両方があるとき
+
+Claude Codeは両方を読みます。リポジトリの設定が手元の設定を置き換えるわけではありません。種類ごとの動きは次のとおりです。
+
+| 種類 | 両方にあるときの動き | この設定集での扱い |
+|---|---|---|
+| CLAUDE.md・rules | 両方が文脈に入ります。プロジェクトのものが後に読まれますが、食い違ったときの優先順位は決まっていません。どちらに従うかは、Claudeの解釈によります | `CLAUDE.md`の冒頭に、`.claude/rules/harness.md`があれば、食い違う点はそちらに従うと書いています |
+| スキル | 同じ名前なら、個人（`~/.claude/skills/`）のものが動きます。リポジトリのものは動きません | 手元では個人の版が動きます。リポジトリのスキルを直したら、この設定集にも同じ変更を入れてください |
+| hook | 置き換わらず、両方が動きます | 同じhookが2回動かないよう、グローバルの側を`run-global.sh`が止めます |
+
+クラウドセッションと、この設定集を手元に入れていないメンバーの環境では、リポジトリの`.claude/`だけが効きます。
+
+出典: Claude Codeの公式ドキュメント（[CLAUDE.md](https://code.claude.com/docs/en/memory)、[スキル](https://code.claude.com/docs/en/skills)、[hook](https://code.claude.com/docs/en/hooks)）
+
 ## 更新
 
-設定やスキルを更新したら、マニフェストを再生成します。
+共有ファイルを更新したら、マニフェストを再生成します。
 
 ```sh
 find . -type f \
   -not -path './.git/*' \
   -not -path './.tmp/*' \
+  -not -path './.claude/*' \
   -not -name '.DS_Store' \
   | sort > MANIFEST.txt
 ```
-
-`claude/skills/`と`codex/skills/`は同じスキルセットになるように更新してください。
-
-## ライセンス
-
-このリポジトリは[MITライセンス](./LICENSE)です。Copyright (c) 2025 nokonoko1203。
-
-一部のスキルは第三者のMITライセンスのコードを含みます。帰属表示とライセンス条件は、各スキル内の`NOTICE.md`（`NOTICE-pstack.md`を含む）や`LICENSE`を参照してください。Unicode由来のデータについては、同梱の`UNICODE-LICENSE.txt`も参照してください。

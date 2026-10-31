@@ -4,12 +4,12 @@ Search lets a user find notes by title or body text, inspect a matching note, an
 
 ## Sub-features
 
-- `search-open` opens search from each supported browser entry point.
-- `search-match` returns title and body matches without changing note data.
-- `search-open-result` opens a result in the note editor.
-- `search-empty` shows a complete empty state for a query with no matches.
-- `search-clear` removes the query and restores the recent-notes view.
-- `search-cli` returns the same matching notes from the terminal.
+- `search-open` opens search from each supported browser entry point. ［e2e: search-toolbar］
+- `search-match` returns title and body matches without changing note data. ［e2e: search-toolbar］
+- `search-open-result` opens a result in the note editor. ［manual: open a result and read the editor heading］
+- `search-empty` shows a complete empty state for a query with no matches. ［e2e: search-empty］
+- `search-clear` removes the query and restores the recent-notes view. ［manual: clear the query and check the recent-notes region］
+- `search-cli` returns the same matching notes from the terminal. ［excluded: the CLI search is covered by the CLI project, not this app］
 
 ## How to get to it (user POV)
 

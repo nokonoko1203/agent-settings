@@ -1,0 +1,463 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Check a verification skill's feature map against the e2e ledger, the tests and e2e results.
+
+Usage: verify-map check --skill DIR [--ledger DIR] [--tests DIR] [--results FILE]
+
+  --skill    the verification skill, e.g. .claude/skills/verify-<app> (reads features/)
+  --ledger   e2e ledger directory (inventory.json from an extractor, scenarios.json by hand);
+             every extracted target must be covered by a scenario or an exception
+  --tests    e2e test directory; finds the @case:<id> tags written in the test files
+  --results  Playwright JSON report of the run to check; compares e2e case IDs and outcomes
+
+The notation is defined in .claude/references/verification-map.md. Standard library only,
+so CI can run it with plain `python3`.
+Exit codes: 0 consistent, 1 inconsistent or a required case did not pass, 2 could not check.
+"""
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+H2_SETS = [
+    ("サブ機能", "ユーザーからの到達方法", re.compile(r".+での操作$"), "注意点"),
+    ("Sub-features", "How to get to it (user POV)", re.compile(r"^Driving it with .+"), "Gotchas"),
+]
+KINDS = {
+    "e2e": "e2e",
+    "手動": "manual",
+    "manual": "manual",
+    "対象外": "excluded",
+    "excluded": "excluded",
+    "未確認": "unverified",
+    "unverified": "unverified",
+}
+ID = r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
+SUBFEATURE = re.compile(rf"^- `({ID})`:? (.*)$")
+TAG = re.compile(r"［([^()\r\n［］:]+)(?:\(([^()\r\n［］]+)\))?: ([^\r\n［］]+)］")
+CASE_TAG = re.compile(rf"^@?case:({ID})$")
+LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+
+
+class CannotCheck(Exception):
+    pass
+
+
+@dataclass
+class Report:
+    errors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def error(self, where: str, message: str) -> None:
+        self.errors.append(f"{where}: {message}")
+
+
+@dataclass
+class Check:
+    kind: str
+    scope: str | None
+    content: str
+
+
+@dataclass
+class SubFeature:
+    id: str
+    file: str
+    line: int
+    checks: list[Check]
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise CannotCheck(f"{path} を読めない: {e}") from e
+
+
+def feature_files(features: Path, report: Report) -> list[Path]:
+    readme = features / "README.md"
+    if not readme.is_file():
+        raise CannotCheck(f"{readme} がない")
+    files = sorted(p for p in features.glob("*.md") if p.name != "README.md")
+    linked = set(re.findall(r"\]\((?:\./)?([^)/#]+\.md)\)", read_text(readme)))
+    for name in sorted(linked - {p.name for p in files}):
+        report.error(f"{readme}", f"索引のリンク先 {name} がない")
+    for p in files:
+        if p.name not in linked:
+            report.error(f"{readme}", f"{p.name} が索引にない")
+    return files
+
+
+def parse_feature(path: Path, report: Report) -> list[SubFeature]:
+    lines = read_text(path).splitlines()
+    fence = ""
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if m and not fence:
+            fence = m.group(1)
+            lines[i] = ""
+        elif fence:
+            # A fence closes only with the same character, at least as long (CommonMark).
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line.strip().strip(fence[0]):
+                fence = ""
+            lines[i] = ""  # code examples are neither headings nor sub-features
+    h2 = [(i, line[3:].strip()) for i, line in enumerate(lines) if line.startswith("## ")]
+    titles = [t for _, t in h2]
+    if not any(
+        len(titles) == 4 and all(t == e if isinstance(e, str) else e.match(t) for t, e in zip(titles, s))
+        for s in H2_SETS
+    ):
+        report.error(str(path), f"H2が決まった4つの並びではない: {titles}")
+        return []
+    start, end = h2[0][0] + 1, h2[1][0]
+    subs = []
+    for i in range(start, end):
+        m = SUBFEATURE.match(lines[i])
+        if not m:
+            if LIST_ITEM.match(lines[i]):
+                report.error(f"{path}:{i + 1}", "サブ機能の行が「- `id`: 説明 ［札］」の形ではない")
+            continue
+        where = f"{path}:{i + 1}"
+        rest = m.group(2)
+        checks = []
+        for tm in TAG.finditer(rest):
+            label, scope, content = tm.group(1).strip(), tm.group(2), tm.group(3).strip()
+            if label not in KINDS:
+                report.error(where, f"札の種類「{label}」は使えない（e2e、手動、対象外、未確認）")
+                continue
+            checks.append(Check(KINDS[label], scope.strip() if scope else None, content))
+        if "［" in TAG.sub("", rest) or "］" in TAG.sub("", rest):
+            report.error(where, "読めない札がある")
+        validate_checks(m.group(1), checks, where, report)
+        subs.append(SubFeature(m.group(1), str(path), i + 1, checks))
+    if not subs:
+        report.error(str(path), "サブ機能が1つもない")
+    return subs
+
+
+def validate_checks(sub_id: str, checks: list[Check], where: str, report: Report) -> None:
+    if not checks:
+        report.error(where, f"{sub_id} に確認手段の札がない")
+        return
+    for c in checks:
+        if not c.content or (c.scope is not None and not c.scope):
+            report.error(where, f"{sub_id}: 札の範囲か内容が空")
+    scoped = [c for c in checks if c.scope]
+    if len(checks) > 1 and len(scoped) != len(checks):
+        report.error(where, f"{sub_id}: 札を複数付けるときは、すべてに範囲を書く")
+    if len(checks) == 1 and scoped:
+        report.error(where, f"{sub_id}: 範囲付きの札が1つだけで、残りの範囲の確認手段がない")
+    scopes = [c.scope for c in scoped]
+    for s in sorted({s for s in scopes if scopes.count(s) > 1}):
+        report.error(where, f"{sub_id}: 範囲「{s}」に札が重なっている")
+    for c in checks:
+        if c.kind == "e2e":
+            for case in (x.strip() for x in c.content.split(",")):
+                if not re.fullmatch(ID, case):
+                    report.error(where, f"{sub_id}: ケースID「{case}」の形が正しくない")
+
+
+def case_refs(subs: list[SubFeature]) -> dict[str, list[str]]:
+    refs: dict[str, list[str]] = {}
+    for s in subs:
+        for c in s.checks:
+            if c.kind == "e2e":
+                for case in (x.strip() for x in c.content.split(",")):
+                    refs.setdefault(case, []).append(f"{s.file}:{s.line}")
+    return refs
+
+
+TARGET_KINDS = ("route", "api", "action", "ui", "call", "link", "unresolved")
+ASPECTS = {"normal", "persist", "invalid-input", "error", "empty"}
+EXCEPTION_KINDS = {"manual", "unit", "out-of-scope"}
+WRITE_METHODS = ("POST ", "PUT ", "PATCH ", "DELETE ")
+
+
+@dataclass
+class Ledger:
+    implemented: dict[str, str] = field(default_factory=dict)  # case id -> where
+    pending: list[tuple[str, str]] = field(default_factory=list)  # (id, reason)
+    exceptions: list[tuple[str, str, str]] = field(default_factory=list)  # (key, kind, reason)
+
+
+def load_json(path: Path) -> dict:
+    try:
+        data = json.loads(read_text(path))
+    except json.JSONDecodeError as e:
+        raise CannotCheck(f"{path} をJSONとして読めない: {e}") from e
+    if not isinstance(data, dict):
+        raise CannotCheck(f"{path} の最上位がオブジェクトではない")
+    return data
+
+
+def nonempty(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def check_ledger(ledger: Path, feature_names: set[str], report: Report) -> Ledger:
+    inv_path, sc_path = ledger / "inventory.json", ledger / "scenarios.json"
+    items = load_json(inv_path).get("items")
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        raise CannotCheck(f"{inv_path} の items がオブジェクトの配列ではない")
+    for i, item in enumerate(items):
+        key, kind = item.get("key"), item.get("kind")
+        if not (nonempty(key) and kind in TARGET_KINDS and key.startswith(f"{kind}:") and nonempty(item.get("source"))):
+            raise CannotCheck(f"{inv_path} items[{i}] に、種類（{'、'.join(TARGET_KINDS)}）で始まる key と、kind・source がない")
+    targets = {i["key"]: i for i in items}
+    data = load_json(sc_path)
+    scenarios, exceptions = data.get("scenarios"), data.get("exceptions", [])
+    if not isinstance(scenarios, list) or not isinstance(exceptions, list):
+        raise CannotCheck(f"{sc_path} の scenarios と exceptions が配列ではない")
+    if not all(isinstance(x, dict) for x in scenarios + exceptions):
+        raise CannotCheck(f"{sc_path} の scenarios と exceptions の要素がオブジェクトではない")
+
+    result = Ledger()
+    covered: dict[str, list[dict]] = {}
+    ids: set[str] = set()
+    for i, s in enumerate(scenarios):
+        sid = s.get("id")
+        where = f"{sc_path} scenarios[{i}]" + (f" {sid}" if isinstance(sid, str) else "")
+        if not (isinstance(sid, str) and re.fullmatch(ID, sid)):
+            report.error(where, "id がケースIDの形ではない")
+            continue
+        if sid in ids:
+            report.error(where, f"ケースID {sid} が重複している")
+        ids.add(sid)
+        if not nonempty(s.get("title")):
+            report.error(where, "title がない")
+        status = s.get("status")
+        if status == "implemented":
+            result.implemented[sid] = where
+        elif status == "pending":
+            if not nonempty(s.get("reason")):
+                report.error(where, "pending に reason がない")
+            result.pending.append((sid, str(s.get("reason", ""))))
+        else:
+            report.error(where, "status は implemented か pending にする")
+        aspects = s.get("aspects")
+        if not isinstance(aspects, list) or not aspects or any(not isinstance(a, str) or a not in ASPECTS for a in aspects):
+            report.error(where, f"aspects は {sorted(ASPECTS)} から選んだ1つ以上の配列にする")
+        covers = s.get("covers")
+        if not isinstance(covers, list) or not covers or not all(nonempty(k) for k in covers):
+            report.error(where, "covers は確認対象のキーの配列にする")
+            continue
+        for key in covers:
+            if key not in targets:
+                report.error(where, f"covers の「{key}」が抽出結果にない（対象が消えたか名前が変わった）")
+            elif targets[key]["kind"] == "unresolved":
+                report.error(where, f"抽出できない「{key}」はケースで受け持てない（抽出できる形に直すか、理由付きの例外にする）")
+            covered.setdefault(key, []).append(s)
+    excepted: set[str] = set()
+    for i, e in enumerate(exceptions):
+        key, kind = e.get("key"), e.get("kind")
+        where = f"{sc_path} exceptions[{i}]" + (f" {key}" if isinstance(key, str) else "")
+        if not nonempty(key):
+            report.error(where, "key がない")
+            continue
+        if key in excepted:
+            report.error(where, "同じ key の例外が重複している")
+        excepted.add(key)
+        if key not in targets:
+            report.error(where, "key が抽出結果にない（対象が消えたか名前が変わった）")
+        if kind not in EXCEPTION_KINDS:
+            report.error(where, f"kind は {sorted(EXCEPTION_KINDS)} のどれかにする")
+        if not nonempty(e.get("reason")):
+            report.error(where, "reason がない")
+        if kind == "manual" and e.get("feature") not in feature_names:
+            report.error(where, "manual の feature に機能ファイル名を書く")
+        if kind == "unit" and not (nonempty(e.get("test")) and Path(e["test"]).is_file()):
+            report.error(where, "unit の test に、ある テストファイルのパスを書く")
+        if key in covered:
+            report.error(where, "ケースが受け持つ対象を例外にもしている")
+        result.exceptions.append((str(key), str(kind), str(e.get("reason", ""))))
+    for key, item in sorted(targets.items()):
+        if key not in covered and key not in excepted:
+            hint = f"（{item.get('reason')}）" if item.get("reason") else ""
+            report.error(str(sc_path), f"{key} を受け持つケースも例外もない{hint}（{item.get('source')}）")
+        writes = item.get("kind") == "action" or (item.get("kind") == "api" and key.split(":", 1)[-1].startswith(WRITE_METHODS))
+        if writes and key in covered:
+            have = {a for s in covered[key] if isinstance(s.get("aspects"), list) for a in s["aspects"] if isinstance(a, str)}
+            for need in ("persist", "invalid-input"):
+                if need not in have:
+                    report.error(str(sc_path), f"書き込みの {key} を受け持つケースに aspects「{need}」がない（持てないなら例外にする）")
+    report.notes.append(f"対応表: 対象{len(targets)}件 / ケース 実装済み{len(result.implemented)}件・未実装{len(result.pending)}件 / 例外{len(result.exceptions)}件")
+    return result
+
+
+def scan_tests(tests: Path) -> dict[str, list[str]]:
+    if not tests.is_dir():
+        raise CannotCheck(f"テストのディレクトリ {tests} がない")
+    found: dict[str, list[str]] = {}
+    for f in sorted(tests.rglob("*")):
+        if f.suffix in (".ts", ".js", ".mjs") and f.is_file():
+            for n, line in enumerate(read_text(f).splitlines(), 1):
+                # Only tags written as string literals, so a comment does not count as a test.
+                for m in re.finditer(rf"[\'\"`]@case:({ID})[\'\"`]", line):
+                    found.setdefault(m.group(1), []).append(f"{f}:{n}")
+    return found
+
+def iter_specs(suite: dict):
+    yield from suite.get("specs", [])
+    for child in suite.get("suites", []):
+        yield from iter_specs(child)
+
+
+def outcome(test: dict) -> str:
+    attempts = [r.get("status") for r in test.get("results") or []]
+    if not attempts:
+        return "未実行"
+    if any(a not in ("passed", "failed", "timedOut", "skipped", "interrupted") for a in attempts):
+        raise CannotCheck(f"試行の状態を読めない: {attempts}")
+    if test.get("status") == "skipped" or attempts[-1] == "skipped":
+        return "スキップ"
+    if attempts[-1] != "passed" or test.get("expectedStatus") != "passed":
+        return "失敗"
+    if test.get("status") == "flaky" or any(a != "passed" for a in attempts):
+        return "不安定"
+    return "成功" if test.get("status") == "expected" else "失敗"
+
+
+def check_results(results: Path, refs: dict[str, list[str]], known: set[str], where_known: str, report: Report) -> set[str]:
+    try:
+        data = json.loads(read_text(results))
+        suites = data["suites"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise CannotCheck(f"{results} をPlaywrightのJSONとして読めない: {e}") from e
+    for err in data.get("errors") or []:
+        report.error(str(results), f"実行全体のエラー: {str(err.get('message', err))[:200]}")
+    if not isinstance(suites, list) or not all(isinstance(x, dict) for x in suites):
+        raise CannotCheck(f"{results} の suites が配列ではない")
+    seen: dict[tuple[str, str], tuple[str, str]] = {}
+    outcomes: dict[str, list[tuple[str, str]]] = {}
+    for suite in suites:
+        for spec in iter_specs(suite):
+            where = f"{spec.get('file')}:{spec.get('line')}"
+            spec_key = spec.get("id") or f"{where} {spec.get('title')}"
+            ids = [m.group(1) for t in spec.get("tags", []) if (m := CASE_TAG.match(t))]
+            if len(ids) != 1:
+                report.error(where, f"テスト「{spec.get('title')}」にケースIDのタグ（@case:<id>）が1つではない: {ids}")
+                continue
+            case = ids[0]
+            for test in spec.get("tests", []):
+                project = test.get("projectName", "")
+                # --repeat-each puts several runs of the same spec here; only other specs are duplicates.
+                if (case, project) in seen and seen[(case, project)][0] != spec_key:
+                    report.error(where, f"ケース {case} が {seen[(case, project)][1]} のテストと重複している")
+                    continue
+                seen[(case, project)] = (spec_key, where)
+                outcomes.setdefault(case, []).append((project, outcome(test)))
+            if case not in known:
+                report.error(where, f"ケース {case} は{where_known}にない")
+    for case, wheres in sorted(refs.items()):
+        results_for = outcomes.get(case) or [("", "未実行")]
+        for project, result in results_for:
+            label = f"{case}" + (f" [{project}]" if project else "")
+            report.notes.append(f"  {result}  {label}")
+            if result != "成功":
+                report.error(wheres[0], f"ケース {label} が{result}")
+    return set(outcomes)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    check = sub.add_parser("check")
+    check.add_argument("--skill", required=True, type=Path)
+    check.add_argument("--ledger", type=Path)
+    check.add_argument("--tests", type=Path)
+    check.add_argument("--results", type=Path)
+    check.add_argument("--cases", help="comma-separated case IDs that were run (after select); others need no result")
+    args = parser.parse_args()
+
+    report = Report()
+    features = args.skill / "features"
+    ledger = None
+    try:
+        files = feature_files(features, report)
+        subs = [s for f in files for s in parse_feature(f, report)]
+        ids = [s.id for s in subs]
+        for s in subs:
+            if ids.count(s.id) > 1:
+                report.error(f"{s.file}:{s.line}", f"サブ機能ID {s.id} が重複している")
+        tags = case_refs(subs)
+        if args.ledger:
+            ledger = check_ledger(args.ledger, {f.name for f in files}, report)
+            # The feature map tags and the ledger name the same implemented cases.
+            for case, wheres in sorted(tags.items()):
+                if case not in ledger.implemented:
+                    state = "未実装（pending）" if case in dict(ledger.pending) else "対応表にない"
+                    report.error(wheres[0], f"札のケース {case} が{state}")
+            for case, where in sorted(ledger.implemented.items()):
+                if case not in tags:
+                    report.error(where, f"ケース {case} を機能一覧の札から参照していない")
+            refs = {c: [w] for c, w in ledger.implemented.items()}
+            known, where_known = set(ledger.implemented) | {c for c, _ in ledger.pending}, "対応表"
+        else:
+            report.notes.append("対応表: 照合なし（--ledgerなし）")
+            refs, known, where_known = tags, set(tags), "機能一覧の札"
+        have_tests: set[str] = set()
+        if args.tests:
+            found = scan_tests(args.tests)
+            have_tests |= set(found)
+            for case, wheres in sorted(found.items()):
+                if case not in known:
+                    report.error(wheres[0], f"ケース {case} は{where_known}にない")
+            for case, where in sorted(refs.items()):
+                if case not in found:
+                    report.error(where[0], f"ケース {case} のテスト（@case:{case}）が {args.tests} にない")
+        if args.results:
+            report.notes.append("e2eの結果:")
+            required = refs
+            if args.cases:
+                picked = {c.strip() for c in args.cases.split(",") if c.strip()}
+                for c in sorted(picked - refs.keys()):
+                    report.error("--cases", f"ケース {c} は実装済みのケースではない")
+                required = {c: w for c, w in refs.items() if c in picked}
+                report.notes.append(f"  （--cases の{len(required)}件だけを照合。残りの{len(refs) - len(required)}件は動かしていない）")
+            try:
+                have_tests |= check_results(args.results, required, known, where_known, report)
+            except (AttributeError, TypeError, KeyError) as e:
+                raise CannotCheck(f"{args.results} の形を解釈できない: {e!r}") from e
+        else:
+            report.notes.append("e2eの結果: 照合なし（--resultsなし。e2eの成否は分からない）")
+        if ledger:
+            for case, _ in ledger.pending:
+                if case in have_tests:
+                    report.error(str(args.ledger / "scenarios.json"), f"未実装のケース {case} にテストがある（implemented に直す）")
+    except CannotCheck as e:
+        print(f"検査できない: {e}", file=sys.stderr)
+        return 2
+
+    unchecked = [(s, c) for s in subs for c in s.checks if c.kind in ("manual", "excluded", "unverified")]
+    print(f"機能: {len(ids)}サブ機能 / 札のケース参照 {len(tags)}件")
+    for note in report.notes:
+        print(note)
+    if ledger and (ledger.pending or ledger.exceptions):
+        print("対応表の未実装と例外:")
+        for case, reason in ledger.pending:
+            print(f"  未実装  {case}: {reason}")
+        names = {"manual": "手動", "unit": "ユニットテスト", "out-of-scope": "対象外"}
+        for key, kind, reason in ledger.exceptions:
+            print(f"  {names.get(kind, kind)}  {key}: {reason}")
+    if unchecked:
+        print("e2eで確かめない範囲（この検査の成功は、これらの確認を意味しない）:")
+        names = {"manual": "手動", "excluded": "対象外", "unverified": "未確認"}
+        for s, c in unchecked:
+            scope = f"({c.scope})" if c.scope else ""
+            print(f"  {names[c.kind]}{scope}  {s.id}: {c.content}")
+    if report.errors:
+        print(f"不整合: {len(report.errors)}件")
+        for e in report.errors:
+            print(f"  {e}")
+        return 1
+    print("不整合: なし")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
