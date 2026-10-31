@@ -73,19 +73,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/block-dangerous-commands.sh"
+            "command": "~/.claude/hooks/run-global.sh block-dangerous-commands.sh"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/block-main-commit.py"
+            "command": "~/.claude/hooks/run-global.sh block-main-commit.py"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/enforce-package-manager.py"
+            "command": "~/.claude/hooks/run-global.sh enforce-package-manager.py"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/allow-git-off-main.py"
+            "command": "~/.claude/hooks/run-global.sh allow-git-off-main.py"
           },
           {
             "type": "command",
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/block-env-edit.sh"
+            "command": "~/.claude/hooks/run-global.sh block-env-edit.sh"
           }
         ]
       }
@@ -132,12 +132,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/stop-check.sh",
+            "command": "~/.claude/hooks/run-global.sh stop-check.sh",
             "timeout": 600
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/evidence-check.sh",
+            "command": "~/.claude/hooks/run-global.sh evidence-check.sh",
             "timeout": 60
           },
           {

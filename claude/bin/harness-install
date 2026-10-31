@@ -1,0 +1,193 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Copy this harness into a repository's .claude/ so cloud sessions and teammates get it.
+
+Usage: harness-install <repo>
+
+Writes rules, skills, the repository-safe hooks, bin/, references/ and the hook entries in
+.claude/settings.json, plus .claude/harness-version (the source commit) and
+.claude/harness-files.txt (the files it manages). Running it again syncs: only changed files
+are written, and managed files that no longer exist in the source are removed. Existing keys
+and hooks in .claude/settings.json are kept. Nothing is committed.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parent.parent
+
+# Hooks that hold for any teammate and in cloud sessions. The rest of claude/hooks is
+# personal (desktop-app links, reply language, macOS folders) and stays global only.
+REPO_HOOKS = [
+    "block-dangerous-commands.sh",
+    "block-main-commit.py",
+    "allow-git-off-main.py",
+    "enforce-package-manager.py",
+    "block-env-edit.sh",
+    "stop-check.sh",
+    "evidence-check.sh",
+]
+HOOK_SUPPORT = ["lib-log.sh"]
+SKIP_REFERENCES = {"xlsx-repair.md"}
+
+# Paths to harness files move into the repository. Per-user paths (~/.claude/state,
+# ~/.claude/harness-log.jsonl, ~/.claude/projects) and mentions of the global harness stay.
+HOOK_COMMAND = re.compile(r'^"\$CLAUDE_PROJECT_DIR"/\.claude/hooks/(\S+)$')
+HOME_REF = re.compile(r"~/\.claude/(bin/|references/|rules/dependency-security\.md|rules/secrets-1password\.md)")
+GLOBAL_HOOK = re.compile(r"^~/\.claude/hooks/(?:run-global\.sh )?(\S+)$")
+
+
+def die(msg: str) -> None:
+    print(f"harness-install: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def source_files() -> dict[str, Path]:
+    """Map each destination path under .claude/ to its source file.
+
+    Only files tracked in the settings repository are copied, so a personal ~/.claude/
+    (extra skills, data) never leaks into a project.
+    """
+    tracked = subprocess.run(["git", "-C", str(SRC), "ls-files"], capture_output=True, text=True)
+    if tracked.returncode != 0:
+        die(f"run this from a checkout of the settings repository, not from {SRC}")
+    files = {"rules/harness.md": SRC / "CLAUDE.md"}
+    for rel in sorted(tracked.stdout.split("\n")):
+        top, _, rest = rel.partition("/")
+        name = Path(rel).name
+        if top == "rules" and "/" not in rest:
+            files[rel] = SRC / rel
+        elif top == "skills":
+            files[rel] = SRC / rel
+        elif top == "hooks" and rest in REPO_HOOKS + HOOK_SUPPORT:
+            files[rel] = SRC / rel
+        elif top == "bin" and "/" not in rest and name != "harness-install":
+            files[rel] = SRC / rel
+        elif top == "references" and "/" not in rest and name not in SKIP_REFERENCES:
+            files[rel] = SRC / rel
+    return files
+
+
+def render(src: Path) -> bytes:
+    data = src.read_bytes()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    return HOME_REF.sub(r".claude/\1", text).encode("utf-8")
+
+
+def harness_hooks() -> dict[str, list[dict]]:
+    """The global hook entries for REPO_HOOKS, pointed at the repository copy."""
+    settings = json.loads((SRC / "settings.json").read_text(encoding="utf-8"))
+    out: dict[str, list[dict]] = {}
+    for event, groups in settings.get("hooks", {}).items():
+        for group in groups:
+            kept = []
+            for hook in group.get("hooks", []):
+                m = GLOBAL_HOOK.match(hook.get("command", ""))
+                if m and m.group(1) in REPO_HOOKS:
+                    kept.append({**hook, "command": f'"$CLAUDE_PROJECT_DIR"/.claude/hooks/{m.group(1)}'})
+            if kept:
+                out.setdefault(event, []).append({**{k: v for k, v in group.items() if k != "hooks"}, "hooks": kept})
+    return out
+
+
+def merge_settings(current: dict) -> dict:
+    merged = json.loads(json.dumps(current))
+    hooks = merged.setdefault("hooks", {})
+    # Drop entries for harness hooks that are no longer shipped, keeping the repository's own.
+    for event in list(hooks):
+        for group in hooks[event]:
+            group["hooks"] = [h for h in group.get("hooks", [])
+                              if not ((m := HOOK_COMMAND.match(h.get("command", ""))) and m.group(1) not in REPO_HOOKS)]
+        hooks[event] = [g for g in hooks[event] if g["hooks"]]
+        if not hooks[event]:
+            del hooks[event]
+    for event, groups in harness_hooks().items():
+        existing = hooks.setdefault(event, [])
+        for group in groups:
+            target = next((g for g in existing if g.get("matcher") == group.get("matcher")), None)
+            if target is None:
+                existing.append(group)
+                continue
+            commands = {h.get("command") for h in target.setdefault("hooks", [])}
+            target["hooks"] += [h for h in group["hooks"] if h["command"] not in commands]
+    deny = json.loads((SRC / "settings.json").read_text(encoding="utf-8")).get("permissions", {}).get("deny", [])
+    perms = merged.setdefault("permissions", {})
+    perms["deny"] = perms.get("deny", []) + [d for d in deny if d not in perms.get("deny", [])]
+    return merged
+
+
+def write_if_changed(path: Path, data: bytes, mode: int | None = None) -> bool:
+    if path.exists() and path.read_bytes() == data and (mode is None or path.stat().st_mode & 0o777 == mode):
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    if mode is not None:
+        path.chmod(mode)
+    return True
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        die("usage: harness-install <repo>")
+    top = subprocess.run(["git", "-C", sys.argv[1], "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0:
+        die(f"not a git repository: {sys.argv[1]}")
+    dest = Path(top.stdout.strip()) / ".claude"
+
+    settings_path = dest / "settings.json"
+    current = {}
+    if settings_path.exists():
+        try:
+            current = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            die(f"cannot parse {settings_path}: {e}")
+
+    files = source_files()
+    manifest_path = dest / "harness-files.txt"
+    previous = set(manifest_path.read_text(encoding="utf-8").split()) if manifest_path.exists() else set()
+    # The manifest is committed in the project; ignore entries that would reach outside .claude/.
+    previous = {rel for rel in previous if (dest / rel).resolve().is_relative_to(dest.resolve())}
+
+    # On first install, refuse to overwrite files the repository already has with other content.
+    conflicts = [rel for rel, src in files.items()
+                 if rel not in previous and (dest / rel).exists() and (dest / rel).read_bytes() != render(src)]
+    if conflicts:
+        die("existing files differ from the harness; move or merge them first:\n  " + "\n  ".join(conflicts))
+
+    changed = []
+    for rel, src in files.items():
+        if write_if_changed(dest / rel, render(src), src.stat().st_mode & 0o777):
+            changed.append(rel)
+    for rel in sorted(previous - set(files)):
+        if (dest / rel).exists():
+            (dest / rel).unlink()
+            changed.append(f"{rel} (removed)")
+
+    if write_if_changed(settings_path, (json.dumps(merge_settings(current), ensure_ascii=False, indent=2) + "\n").encode()):
+        changed.append("settings.json")
+    if write_if_changed(manifest_path, ("\n".join(sorted(files)) + "\n").encode()):
+        changed.append("harness-files.txt")
+    version = subprocess.run(["git", "-C", str(SRC), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if write_if_changed(dest / "harness-version", f"{version or 'unknown'}\n".encode()):
+        changed.append("harness-version")
+
+    for rel in previous - set(files):
+        d = (dest / rel).parent
+        while d != dest and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
+    print("\n".join(f".claude/{c}" for c in changed) if changed else "no changes")
+
+
+if __name__ == "__main__":
+    main()
