@@ -10,7 +10,8 @@ Writes rules, skills, the repository-safe hooks, bin/, references/ and the hook 
 .claude/settings.json, plus .claude/harness-version (the source commit) and
 .claude/harness-files.txt (the files it manages). Running it again syncs: only changed files
 are written, and managed files that no longer exist in the source are removed. Existing keys
-and hooks in .claude/settings.json are kept. Nothing is committed.
+and the project's own hooks in .claude/settings.json are kept; entries that call the global copy
+of a hook the repository now carries (~/.claude/hooks/...) are replaced. Nothing is committed.
 """
 
 import json
@@ -38,7 +39,8 @@ HOOK_SUPPORT = ["lib-log.sh"]
 SKIP_REFERENCES = {"xlsx-repair.md"}
 
 # Paths to harness files move into the repository. Per-user paths (~/.claude/state,
-# ~/.claude/harness-log.jsonl, ~/.claude/projects) and mentions of the global harness stay.
+# ~/.claude/harness-log.jsonl, ~/.claude/projects) and mentions of the global harness stay; a text that
+# must point at the global copy even inside a project writes it as $HOME/.claude/bin/..., which is not rewritten.
 HOOK_COMMAND = re.compile(r'^"\$CLAUDE_PROJECT_DIR"/\.claude/hooks/(\S+)$')
 HOME_REF = re.compile(r"~/\.claude/(bin/|references/|rules/dependency-security\.md|rules/secrets-1password\.md)")
 GLOBAL_HOOK = re.compile(r"^~/\.claude/hooks/(?:run-global\.sh )?(\S+)$")
@@ -100,14 +102,21 @@ def harness_hooks() -> dict[str, list[dict]]:
     return out
 
 
-def merge_settings(current: dict) -> dict:
+def is_replaced(command: str, previous: set[str]) -> bool:
+    """True for a hook entry the harness owns: one it shipped before and no longer ships, or an
+    entry that calls a global copy of a hook the repository now carries itself."""
+    if (m := HOOK_COMMAND.match(command)):
+        return f"hooks/{m.group(1)}" in previous and m.group(1) not in REPO_HOOKS
+    return bool((m := GLOBAL_HOOK.match(command)) and m.group(1) in REPO_HOOKS)
+
+
+def merge_settings(current: dict, previous: set[str]) -> dict:
     merged = json.loads(json.dumps(current))
     hooks = merged.setdefault("hooks", {})
-    # Drop entries for harness hooks that are no longer shipped, keeping the repository's own.
+    # Drop the harness's own stale entries; the repository's own hooks stay.
     for event in list(hooks):
         for group in hooks[event]:
-            group["hooks"] = [h for h in group.get("hooks", [])
-                              if not ((m := HOOK_COMMAND.match(h.get("command", ""))) and m.group(1) not in REPO_HOOKS)]
+            group["hooks"] = [h for h in group.get("hooks", []) if not is_replaced(h.get("command", ""), previous)]
         hooks[event] = [g for g in hooks[event] if g["hooks"]]
         if not hooks[event]:
             del hooks[event]
@@ -173,7 +182,7 @@ def main() -> None:
             (dest / rel).unlink()
             changed.append(f"{rel} (removed)")
 
-    if write_if_changed(settings_path, (json.dumps(merge_settings(current), ensure_ascii=False, indent=2) + "\n").encode()):
+    if write_if_changed(settings_path, (json.dumps(merge_settings(current, previous),ensure_ascii=False, indent=2) + "\n").encode()):
         changed.append("settings.json")
     if write_if_changed(manifest_path, ("\n".join(sorted(files)) + "\n").encode()):
         changed.append("harness-files.txt")

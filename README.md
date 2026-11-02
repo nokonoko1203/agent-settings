@@ -9,7 +9,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 1. 作業の前に重さ（E/0/1/2/R）を決めて`harness-log triage`で記録する。マイグレーション・認可・公開API・データ削除・課金・本番反映はレベル2以上。
 2. 調査は`imozuru`・`research`、既存コードの理解は`how`・`why`。
 3. 動かさないと分からない実装は`spike-rebuild`で、試作して捨ててから作り直す。
-4. 設計は`spec`で、受け入れ条件に`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
+4. 設計は`spec`で、受け入れ条件に`[e2e]`・`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
 5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。運用してみた実感として、Solはトークン消費が軽く、丁寧な指示によく従う。そこで、手間のかかる指示書（ゴール・完了条件・範囲・背景・出力・止まる条件）はClaude Code（Opus）に書かせる。Solの報告は証拠ではないので、差分とテスト結果はClaude Codeが自分で確かめる。
 6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
 7. コード変更後は`code-reviewer`スキルでレビューし、PRを作る。Claude Codeでは、Codex（Sol）にも別にレビューさせ、指摘をコードで確かめて統合する。マージは人が行う。
@@ -54,7 +54,6 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 | `git`、`gh` | ブランチ保護のhook、PR作成 |
 | `codex` | `codex`スキル（Claude CodeからCodexに作業を頼む） |
 | `op`（1Password CLI） | シークレットの注入（`rules/secrets-1password.md`） |
-| `ctx7` | Context7でライブラリの最新仕様を確かめる。npmパッケージ`ctx7`で、`bunx ctx7 library <name> <query>`のように実行できる。CLAUDE.mdは`ctx7`コマンドで呼ぶので、PATHの通る場所に`bunx ctx7 "$@"`を実行するラッパーを置くか、各自インストールする |
 
 ## 使い方
 
@@ -93,6 +92,7 @@ jq -s '.[0] * .[1]' ~/.claude/settings.json claude/settings.json > /tmp/settings
 
 | イベント | hook | 内容 |
 |---|---|---|
+| すべて | `run-global.sh` | 下の一部のhookを包む。起動したディレクトリに`harness-install`で入れたハーネスの写し（`.claude/harness-version`）があれば、グローバルのhookは動かさない（プロジェクトのhookが動くため） |
 | PreToolUse（Bash） | `block-dangerous-commands.sh` | `rm -rf`などの取り返しのつかないコマンドを止める |
 | PreToolUse（Bash） | `block-main-commit.py` | mainへの直接コミットを止める |
 | PreToolUse（Bash） | `allow-git-off-main.py` | main以外のブランチでのgit操作と、mainからの新しいブランチの作成を自動で許可する |
@@ -121,7 +121,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 設計 | `spike-rebuild` | 試作して測り、仕様を作ってから作り直す |
 | 実装 | `codex` | Codex CLIに、モデル・effortを指定して作業を頼む |
 | レビュー | `code-reviewer` | PR・差分を、再現条件と根拠のある不具合に絞ってレビューする |
-| 保守運用 | `harness-init` | リポジトリに`make check`・CI・AGENTS.mdを整える |
+| 保守運用 | `harness-init` | リポジトリに`make check`・CI・CLAUDE.mdを整える |
 | 保守運用 | `create-verification-skill` | アプリを利用者と同じ操作で確かめる、プロジェクト専用の検証スキルを作る |
 | 保守運用 | `maintain-verification-skill` | 検証スキルと機能一覧を、アプリの現状に合わせて点検する |
 | 保守運用 | `create-e2e-ci` | 外部との境界をモックに向けたe2eテストと、監査・型検査・テスト・e2eを動かすCIを作る |
@@ -152,9 +152,9 @@ git commit -m "chore: エージェントのハーネスを入れる"
 
 - 規則（`CLAUDE.md`）は`.claude/rules/harness.md`に、スキル、hook、`bin/`、`references/`はそれぞれ`.claude/`の下に入ります
 - 入るhookは、危険なコマンド、mainへのコミット、`.env`の編集を止めるもの、パッケージマネージャーの確認、`stop-check.sh`、`evidence-check.sh`です。返信のリンク・言語の確認と`xlsx-guard.py`は個人の環境向けなので入りません
-- `.claude/settings.json`の既存のキーとhookは残ります
+- `.claude/settings.json`の既存のキーと、プロジェクト独自のhookは残ります。グローバルのhookを直接呼ぶ旧形式の登録（`~/.claude/hooks/stop-check.sh`など）は、リポジトリ版に置き換わります
 - もう一度実行すると、設定集の更新に合わせて同期します。設定集から消えたファイルは消えます
-- `.claude/harness-version`のあるリポジトリでは、グローバルの同じhookは`run-global.sh`が止めるので、二重には動きません
+- `.claude/harness-version`のあるディレクトリでClaude Codeを起動すると、グローバルの同じhookは`run-global.sh`が止めるので、二重には動きません。サブディレクトリから起動したときは、プロジェクトの`.claude/settings.json`が読まれないので、グローバルのhookが動きます
 - コミットはしません。上の例のように、自分でコミットしてください
 - 以前の版から更新した場合、手元の`~/.claude/settings.json`は「使い方」の手順では上書きされません。`claude/settings.json`と比べ、上の7つのhookのコマンドを`~/.claude/hooks/run-global.sh <hookのファイル名>`に書き換えてください。書き換えないと、ハーネスを入れたリポジトリでhookが2回動きます
 

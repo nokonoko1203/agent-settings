@@ -289,14 +289,130 @@ def check_ledger(ledger: Path, feature_names: set[str], report: Report) -> Ledge
     return result
 
 
+REGEX_AFTER_WORDS = {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield", "await"}
+
+
+def strip_comments(source: str) -> str:
+    """Blank out // and /* */ comments in JavaScript or TypeScript, keeping line breaks.
+
+    Strings, template literals (with ${} nesting) and regular expression literals are kept as
+    they are, so a // inside them is not a comment. A / starts a regular expression where an
+    operand is expected, the usual heuristic of JavaScript tokenizers.
+    """
+    out: list[str] = []
+    n = len(source)
+    i = 0
+    stack: list[str] = []  # open brackets: "(", "(ctl" (if/while/for/with), "{", "{obj", "[", "${"
+    prev = ""  # last significant token in code: a character, an operator, or a word; "0" for an operand
+
+    def expects_operand(token: str) -> bool:
+        return token in ("", "=>") or token in REGEX_AFTER_WORDS or (len(token) == 1 and token in "(,=:[!&|?{};+-*%<>~^")
+
+    def skip_quoted(j: int, quote: str) -> int:
+        while j < n and source[j] != quote and source[j] != "\n":
+            j += 2 if source[j] == "\\" else 1
+        return j + 1
+
+    def skip_template(j: int) -> tuple[int, bool]:
+        """From inside a template literal, return the index after its end or after a ${."""
+        while j < n:
+            if source[j] == "\\":
+                j += 2
+            elif source[j] == "`":
+                return j + 1, False
+            elif source.startswith("${", j):
+                return j + 2, True
+            else:
+                j += 1
+        return n, False
+
+    def skip_regex(j: int) -> int:
+        in_class = False
+        while j < n and source[j] != "\n":
+            c = source[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                j += 1
+                while j < n and (source[j].isalnum() or source[j] == "_"):
+                    j += 1
+                return j
+            j += 1
+        return j
+
+    while i < n:
+        c = source[i]
+        if c in "'\"":
+            end = skip_quoted(i + 1, c)
+            out.append(source[i:end])
+            i, prev = end, "0"
+        elif c == "`" or (c == "}" and stack and stack[-1] == "${"):
+            if c == "}":
+                stack.pop()
+            end, opened = skip_template(i + 1)
+            out.append(source[i:end])
+            i, prev = end, ("{" if opened else "0")
+            if opened:
+                stack.append("${")
+        elif source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+        elif source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            out.append("\n" * source.count("\n", i, end))
+            i = end
+        elif c == "/" and expects_operand(prev):
+            end = skip_regex(i + 1)
+            out.append(source[i:end])
+            i, prev = end, "0"
+        elif c.isalnum() or c in "_$":
+            j = i
+            while j < n and (source[j].isalnum() or source[j] in "_$"):
+                j += 1
+            out.append(source[i:j])
+            i, prev = j, source[i:j]
+        elif source.startswith(("++", "--", "=>"), i):
+            # ++ and -- are taken as postfix: a / after them divides.
+            op = source[i:i + 2]
+            out.append(op)
+            i, prev = i + 2, ("0" if op != "=>" else op)
+        else:
+            if c == "(":
+                stack.append("(ctl" if prev in ("if", "while", "for", "with") else "(")
+            elif c == "{":
+                # A { where an operand is expected opens an object literal; elsewhere a block.
+                stack.append("{obj" if prev != "=>" and expects_operand(prev) and prev not in ("", "{", ";", "}") else "{")
+            elif c in ")}" and stack:
+                kind = stack.pop()
+                out.append(c)
+                # After if (...) or a block a statement starts; after an expression an operator does.
+                i, prev = i + 1, (";" if kind in ("(ctl", "{") else "0")
+                continue
+            elif c == "[":
+                stack.append("[")
+            elif c == "]" and stack:
+                stack.pop()
+            out.append(c)
+            if not c.isspace():
+                prev = c
+            i += 1
+    return "".join(out)
+
+
 def scan_tests(tests: Path) -> dict[str, list[str]]:
     if not tests.is_dir():
         raise CannotCheck(f"テストのディレクトリ {tests} がない")
     found: dict[str, list[str]] = {}
     for f in sorted(tests.rglob("*")):
         if f.suffix in (".ts", ".js", ".mjs") and f.is_file():
-            for n, line in enumerate(read_text(f).splitlines(), 1):
-                # Only tags written as string literals, so a comment does not count as a test.
+            for n, line in enumerate(strip_comments(read_text(f)).splitlines(), 1):
+                # Only tags written as string literals outside comments count as a test.
                 for m in re.finditer(rf"[\'\"`]@case:({ID})[\'\"`]", line):
                     found.setdefault(m.group(1), []).append(f"{f}:{n}")
     return found
@@ -407,6 +523,8 @@ def main() -> int:
             for case, wheres in sorted(found.items()):
                 if case not in known:
                     report.error(wheres[0], f"ケース {case} は{where_known}にない")
+                if len(wheres) > 1:
+                    report.error(wheres[1], f"ケース {case} のタグが複数のテストにある: {', '.join(wheres)}")
             for case, where in sorted(refs.items()):
                 if case not in found:
                     report.error(where[0], f"ケース {case} のテスト（@case:{case}）が {args.tests} にない")

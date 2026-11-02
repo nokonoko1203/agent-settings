@@ -1,17 +1,5 @@
 # Allowed without prompt.
 prefix_rule(
-    pattern = ["ctx7", "library"],
-    decision = "allow",
-    justification = "Context7 library resolution is trusted for documentation lookup.",
-)
-
-prefix_rule(
-    pattern = ["ctx7", "docs"],
-    decision = "allow",
-    justification = "Context7 docs lookup is trusted for documentation lookup.",
-)
-
-prefix_rule(
     pattern = ["git", "switch"],
     decision = "allow",
     justification = "Branch switching and creation via git switch are allowed.",

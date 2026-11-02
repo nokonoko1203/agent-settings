@@ -165,15 +165,19 @@ function estreeUrl(arg: Node | undefined): string[] | null {
 function estreeMethod(arg: Node | undefined): string | null {
 	if (!arg) return 'GET';
 	if (arg.type !== 'ObjectExpression') return null;
+	// A later property overrides an earlier one, so the last spread or `method` decides.
+	let method: string | null = 'GET';
 	for (const p of arg.properties as Node[]) {
-		if (p.type === 'SpreadElement') return null;
 		const key = p.key as Node;
-		if (p.type === 'Property' && (key.name === 'method' || key.value === 'method')) {
+		// A computed key is static only when it is a string literal, as in ['method'].
+		const name = p.type === 'SpreadElement' ? null : !p.computed ? String(key.name ?? key.value) : key.type === 'Literal' ? key.value : null;
+		if (typeof name !== 'string') method = null;
+		else if (p.type === 'Property' && name === 'method') {
 			const v = p.value as Node;
-			return v.type === 'Literal' && typeof v.value === 'string' ? v.value.toUpperCase() : null;
+			method = v.type === 'Literal' && typeof v.value === 'string' ? v.value.toUpperCase() : null;
 		}
 	}
-	return 'GET';
+	return method;
 }
 
 function extractSvelte(c: Collector, file: string, text: string) {
@@ -281,13 +285,24 @@ function tsUrl(arg: ts.Expression | undefined): string[] | null {
 function tsMethod(arg: ts.Expression | undefined): string | null {
 	if (!arg) return 'GET';
 	if (!ts.isObjectLiteralExpression(arg)) return null;
+	// A later property overrides an earlier one, so the last spread or `method` decides.
+	let method: string | null = 'GET';
 	for (const p of arg.properties) {
-		if (ts.isSpreadAssignment(p)) return null;
-		const name = p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name)) ? p.name.text : null;
-		if (name !== 'method') continue;
-		return ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer) ? p.initializer.text.toUpperCase() : null;
+		const name = propertyName(p);
+		if (name === null) method = null;
+		else if (name === 'method') {
+			method = ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer) ? p.initializer.text.toUpperCase() : null;
+		}
 	}
-	return 'GET';
+	return method;
+}
+
+/** The static name of an object literal member, or null for a spread or a name only known at run time. */
+function propertyName(p: ts.ObjectLiteralElementLike): string | null {
+	if (ts.isSpreadAssignment(p) || !p.name) return null;
+	if (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name) || ts.isNumericLiteral(p.name)) return p.name.text;
+	if (ts.isComputedPropertyName(p.name) && ts.isStringLiteralLike(p.name.expression)) return p.name.expression.text;
+	return null;
 }
 
 function exportedNames(sf: ts.SourceFile): Map<string, ts.Node> {
@@ -324,7 +339,11 @@ function extractModule(c: Collector, file: string, text: string) {
 				c.unresolved(file, line(actions), 'actions', 'actionsの名前が静的に決まらない');
 			} else {
 				for (const p of obj.properties) {
-					const n = p.name?.getText(sf).replace(/^['"]|['"]$/g, '');
+					const n = propertyName(p);
+					if (n === null) {
+						c.unresolved(file, line(p), `actions.${p.name?.getText(sf)}`, 'actionの名前が静的に決まらない');
+						continue;
+					}
 					const target = n === 'default' ? routePath(file) : `${routePath(file)}?/${n}`;
 					c.add({ key: `action:${target}`, kind: 'action', source: file, line: line(p) });
 				}

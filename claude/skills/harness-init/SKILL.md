@@ -1,6 +1,6 @@
 ---
 name: harness-init
-description: "リポジトリにエージェント開発用の検証基盤を整える。`make check`、GitHub ActionsのCI、短いAGENTS.mdを、言語とツールを検出して作る。'harness-init'、'リポジトリを初期化して'、'検証コマンドを用意して'、新規リポジトリ作成直後や既存リポジトリへの導入時に使う。"
+description: "リポジトリにエージェント開発用の検証基盤を整える。`make check`、GitHub ActionsのCI、短いCLAUDE.mdを、言語とツールを検出して作る。'harness-init'、'リポジトリを初期化して'、'検証コマンドを用意して'、新規リポジトリ作成直後や既存リポジトリへの導入時に使う。"
 ---
 
 # リポジトリの検証基盤
@@ -31,7 +31,7 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 | TypeScript（bun） | `bun run lint`、`bun run typecheck`、`bun test` |
 | Python（uv） | `uv run ruff check`、`uv run ruff format --check`、`uv run pyright`（または既存の型検査）、`uv run pytest -q` |
 
-検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`も足す（`~/.claude/references/verification-map.md`）。ブラウザを起動しないので速い。
+検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`も足す（`~/.claude/references/verification-map.md`）。CIでも動かすため、`.claude/bin/`になければ、同文書の「つなぎ方」に従ってリポジトリに入れる。ブラウザを起動しないので速い。
 
 `Makefile`がなく、作る理由もない場合は`.claude/check.sh`（実行権限付き、`set -euo pipefail`）にする。作成後に実行し、現状で通ることを確認する。通らない場合は、既存の失敗として一覧を報告し、勝手に直さない。
 
@@ -45,13 +45,13 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 - Actionはタグではなくコミットハッシュで固定し、タグをコメントで残す。ハッシュは`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`などで現在の値を確認する。
 - `permissions: contents: read`を既定にする。
 
-監査コマンドやActionの使い方は公式資料かContext7（`ctx7`）で現在の仕様を確認する。
+監査コマンドやActionの使い方は公式資料で現在の仕様を確認する。
 
-新規プロジェクトでは、最小リリース期間の設定と、postinstall/preinstallスクリプトの既定ブロックも行う。具体的な設定キーは公式資料かContext7（`ctx7`）で確認する。
+新規プロジェクトでは、最小リリース期間の設定と、postinstall/preinstallスクリプトの既定ブロックも行う。具体的な設定キーは公式資料で確認する。
 
-## 4. AGENTS.md
+## 4. CLAUDE.md
 
-100行以内で、エージェントが最初に読む地図を書く。CLAUDE.mdしか使わないリポジトリでは、CLAUDE.mdに書くか、`@AGENTS.md`を読み込む1行を置く。
+100行以内で、エージェントが最初に読む地図をCLAUDE.mdに書く。既にAGENTS.mdがあるリポジトリでは、内容を写さず、CLAUDE.mdに`@AGENTS.md`を読み込む1行を置く。
 
 書くもの:
 
