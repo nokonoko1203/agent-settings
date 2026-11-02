@@ -31,6 +31,8 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 | TypeScript（bun） | `bun run lint`、`bun run typecheck`、`bun test` |
 | Python（uv） | `uv run ruff check`、`uv run ruff format --check`、`uv run pyright`（または既存の型検査）、`uv run pytest -q` |
 
+検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`も足す（`~/.claude/references/verification-map.md`）。ブラウザを起動しないので速い。
+
 `Makefile`がなく、作る理由もない場合は`.claude/check.sh`（実行権限付き、`set -euo pipefail`）にする。作成後に実行し、現状で通ることを確認する。通らない場合は、既存の失敗として一覧を報告し、勝手に直さない。
 
 ## 3. CI
@@ -60,7 +62,11 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 
 書かないもの: 一般的なコーディング規約、lintやhooksで強制できる規則、ユーザーのグローバル設定と重複する内容。守らせたい規則は、文章ではなくlint規則、テスト、hooksに置く。
 
-## 5. 報告
+## 5. ハーネスを入れる
+
+クラウドセッションや他のメンバーの手元でも同じ規則・スキル・hookを効かせたい場合は、ユーザーの承認を得てから、設定集のクローンの`claude/bin/harness-install <リポジトリ>`を実行する。クローンの場所が分からなければユーザーに聞く（`~/.claude/`から実行すると拒否される）。`.claude/`にハーネスの写しを書き、`.claude/settings.json`にhookを足す。既存のキーとhookは残る。もう一度実行すると、設定集の更新に合わせて同期する。
+
+## 6. 報告
 
 作成・変更したファイルと、実行した`check`の結果を示す。人間が行う作業として、次を伝える。
 

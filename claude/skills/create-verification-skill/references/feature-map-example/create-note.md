@@ -4,10 +4,10 @@ Create note lets a user save a titled note from the browser or CLI, cancel an un
 
 ## Sub-features
 
-- `create-open` opens a blank editor from each browser entry point.
-- `create-save` persists a title and body.
-- `create-cancel` discards an unfinished browser draft.
-- `create-cli` creates the same note shape from the terminal.
+- `create-open` opens a blank editor from each browser entry point. ［e2e: create-from-toolbar］
+- `create-save` persists a title and body. ［e2e(saved title and body): create-from-toolbar］ ［manual(note survives a restart): restart Notes and reopen the note］
+- `create-cancel` discards an unfinished browser draft. ［manual: cancel a draft and check the note list］
+- `create-cli` creates the same note shape from the terminal. ［unverified: the CLI cannot reach a disposable data directory yet］
 
 ## How to get to it (user POV)
 
