@@ -2,14 +2,14 @@
 
 軽い設定を勧めていた旧版は、タグ`v1`にあります。エージェントに任せる範囲が広がり、作業の重さの判断・hook・証拠・レビューで品質を担保する仕組みが必要になったため、方針を変えました。
 
-Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめています。`claude/`と`codex/`は同じ開発フローとスキルセットで揃えており、`codex/AGENTS.md`は`claude/CLAUDE.md`と同じ内容です。
+Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめています。`claude/`と`codex/`は同じ開発フローで揃えており、`codex/AGENTS.md`は`claude/CLAUDE.md`と同じ内容です。e2e・プレビュー環境のスキルは`claude/`にだけ入れています。
 
 ## 開発フロー
 
 1. 作業の前に重さ（E/0/1/2/R）を決めて`harness-log triage`で記録する。マイグレーション・認可・公開API・データ削除・課金・本番反映はレベル2以上。
 2. 調査は`imozuru`・`research`、既存コードの理解は`how`・`why`。
 3. 動かさないと分からない実装は`spike-rebuild`で、試作して捨ててから作り直す。
-4. 設計は`spec`で、受け入れ条件に`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
+4. 設計は`spec`で、受け入れ条件に`[e2e]`・`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
 5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。ゴール・完了条件・範囲・背景・出力・止まる条件をまとめた指示書はClaude Code（Opus）に書かせる。Solの報告だけで完了とせず、差分とテスト結果はClaude Codeが自分で確かめる。
 6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
 7. コード変更後は`code-reviewer`スキルでレビューし、PRを作る。Claude Codeでは、Codex（Sol）にも別にレビューさせ、指摘をコードで確かめて統合する。マージは人が行う。
@@ -27,9 +27,9 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 ├── claude/                 # ~/.claude/ に展開する
 │   ├── CLAUDE.md
 │   ├── settings.json       # hook・権限・環境変数
-│   ├── bin/                # harness-log, harness-report
+│   ├── bin/                # harness-log, harness-report, harness-install, verify-map など
 │   ├── hooks/
-│   ├── references/         # evidence.mdの形式など
+│   ├── references/         # evidence.mdの形式、e2eの対応表など
 │   ├── rules/
 │   └── skills/
 └── codex/                  # ~/.codex/ に展開する
@@ -47,7 +47,8 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 
 | ツール | 用途 |
 |---|---|
-| `uv` | `harness-report`の実行 |
+| `uv` | `harness-report`・`harness-install`・`verify-map`の実行 |
+| `bun` | `e2e-inventory-sveltekit.ts`の実行 |
 | `python3` | Python製hookの実行 |
 | `jq` | hookでのJSON処理 |
 | `make` | `stop-check.sh`が`make check`を実行する |
@@ -55,7 +56,6 @@ Claude CodeとCodexで使う設定、ルール、hook、スキルをまとめて
 | `git`、`gh` | ブランチ保護のhook、PR作成 |
 | `codex` | `codex`スキル（Claude CodeからCodexに作業を頼む） |
 | `op`（1Password CLI） | シークレットの注入（`rules/secrets-1password.md`） |
-| `ctx7` | Context7でライブラリの最新仕様を確かめる。npmパッケージ`ctx7`で、`bunx ctx7 library <name> <query>`のように実行できる。CLAUDE.mdは`ctx7`コマンドで呼ぶので、PATHの通る場所に`bunx ctx7 "$@"`を実行するラッパーを置くか、各自インストールする |
 
 ## 使い方
 
@@ -87,6 +87,7 @@ chmod +x ~/.claude/bin/* ~/.claude/hooks/*
 
 | イベント | hook | 内容 |
 |---|---|---|
+| すべて | `run-global.sh` | 下の一部のhookを包む。起動したディレクトリに`harness-install`で入れたハーネスの写し（`.claude/harness-version`）があれば、グローバルのhookは動かさない（プロジェクトのhookが動くため） |
 | PreToolUse（Bash） | `block-dangerous-commands.sh` | `rm -rf`などの取り返しのつかないコマンドを止める |
 | PreToolUse（Bash） | `block-main-commit.py` | mainへの直接コミットを止める |
 | PreToolUse（Bash） | `allow-git-off-main.py` | main以外のブランチでのgit操作を自動で許可する |
@@ -102,7 +103,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 
 ## スキル
 
-`claude/skills/`と`codex/skills/`には同じスキルセットを入れています。
+`codex/skills/`には、下の表のうち「Claude Codeのみ」以外のスキルを入れています。e2eの対応表に関する追記（`spec`の`[e2e]`など）は`claude/skills/`にだけ入れています。
 
 | 段階 | スキル | 内容 |
 |---|---|---|
@@ -115,9 +116,12 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 設計 | `spike-rebuild` | 試作して測り、仕様を作ってから作り直す |
 | 実装 | `codex` | Codex CLIに、モデル・effortを指定して作業を頼む |
 | レビュー | `code-reviewer` | PR・差分を、再現条件と根拠のある不具合に絞ってレビューする |
-| 保守運用 | `harness-init` | リポジトリに`make check`・CI・AGENTS.mdを整える |
+| 保守運用 | `harness-init` | リポジトリに`make check`・CI・CLAUDE.mdを整える |
 | 保守運用 | `create-verification-skill` | アプリを利用者と同じ操作で確かめる、プロジェクト専用の検証スキルを作る |
 | 保守運用 | `maintain-verification-skill` | 検証スキルと機能一覧を、アプリの現状に合わせて点検する |
+| 保守運用 | `write-e2e-case` | 実際に操作して確かめた手順をPlaywrightのe2eケースにし、対応表と機能一覧に載せる（Claude Codeのみ） |
+| 保守運用 | `create-e2e-ci` | 外部との境界をモックに向けたe2eと、監査・型検査・テスト・e2eを動かすCIを作る（Claude Codeのみ） |
+| 保守運用 | `create-preview-env` | PRごとのプレビュー環境（Cloudflare WorkersかAWS Amplify）とアクセス制限を作る（Claude Codeのみ） |
 | 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
 | 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
 | 文書 | `yomiyasu` | AIが生成した日本語を推敲する |
@@ -134,7 +138,7 @@ find . -type f \
   | sort > MANIFEST.txt
 ```
 
-`claude/skills/`と`codex/skills/`は同じスキルセットになるように更新してください。
+`codex/skills/`は、e2eの対応表に関する追記を除いて、`claude/skills/`の同名のスキルと同じ内容になるように更新してください。
 
 ## ライセンス
 

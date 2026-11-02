@@ -182,7 +182,9 @@ def main():
 
     absolute_hint = (
         "Files outside the session's folder are written as absolute paths; send videos or images the "
-        "user should watch or view with SendUserFile as well."
+        "user should watch or view with SendUserFile as well. Write the absolute path as the link "
+        "target as is, as `[name](/abs/path)`: do not wrap it in angle brackets like `[name](</abs/path>)`, "
+        "which the app does not render as a link."
     )
     parts = []
     if broken:

@@ -1,8 +1,12 @@
+./LICENSE
 ./MANIFEST.txt
 ./README.md
 ./claude/CLAUDE.md
+./claude/bin/e2e-inventory-sveltekit.ts
+./claude/bin/harness-install
 ./claude/bin/harness-log
 ./claude/bin/harness-report
+./claude/bin/verify-map
 ./claude/hooks/allow-git-off-main.py
 ./claude/hooks/block-dangerous-commands.sh
 ./claude/hooks/block-env-edit.sh
@@ -12,10 +16,12 @@
 ./claude/hooks/enforce-package-manager.py
 ./claude/hooks/evidence-check.sh
 ./claude/hooks/lib-log.sh
+./claude/hooks/run-global.sh
 ./claude/hooks/stop-check.sh
 ./claude/hooks/xlsx-guard.py
 ./claude/hooks/xlsx_validate.py
 ./claude/references/evidence.md
+./claude/references/verification-map.md
 ./claude/references/xlsx-repair.md
 ./claude/rules/dependency-security.md
 ./claude/rules/secrets-1password.md
@@ -33,6 +39,12 @@
 ./claude/skills/codex/SKILL.md
 ./claude/skills/correct/NOTICE.md
 ./claude/skills/correct/SKILL.md
+./claude/skills/create-e2e-ci/SKILL.md
+./claude/skills/create-e2e-ci/references/workflows.md
+./claude/skills/create-preview-env/SKILL.md
+./claude/skills/create-preview-env/references/amplify.md
+./claude/skills/create-preview-env/references/cloudflare.md
+./claude/skills/create-preview-env/references/workflows.md
 ./claude/skills/create-verification-skill/NOTICE.md
 ./claude/skills/create-verification-skill/SKILL.md
 ./claude/skills/create-verification-skill/references/feature-map-example/README.md
@@ -73,6 +85,7 @@
 ./claude/skills/why/references/sources/incident-postmortem.md
 ./claude/skills/why/references/sources/notion.md
 ./claude/skills/why/references/sources/slack.md
+./claude/skills/write-e2e-case/SKILL.md
 ./claude/skills/yomiyasu/.codex-plugin/plugin.json
 ./claude/skills/yomiyasu/LICENSE
 ./claude/skills/yomiyasu/SKILL.md
