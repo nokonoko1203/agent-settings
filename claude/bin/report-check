@@ -9,6 +9,7 @@ import copy
 import datetime
 import hashlib
 import json
+import math
 import re
 import shlex
 import shutil
@@ -16,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-import unicodedata
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -32,10 +32,12 @@ class CannotCheck(Exception):
 
 
 def norm(text):
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text)))
+    return re.sub(r"\s+", "", str(text))
 
 
 def numbers(text):
+    # Figure/table references are identifiers, not measurements or quantities.
+    text = re.sub(r"(?:図|表)\d+", "", str(text))
     return set(re.findall(r"(?<![0-9.])[+-]?\d+(?:,\d{3})*(?:\.\d+)?", norm(text)))
 
 
@@ -280,7 +282,18 @@ def claim_errors(report, claim):
             elif not norm(ev["value"]) or norm(ev["value"]) not in norm(path.read_text(encoding="utf-8")):
                 errors.append(f"成果物のvalueが一致しない: {ev['path']}")
             support.append(str(ev["value"]))
-    if kind in {"事実", "実証結果"} and numbers(claim["text"]) - numbers(" ".join(support)):
+    if kind in {"解釈", "提案"}:
+        # Only the factual/experimental premises may support derived quantities.
+        support = []
+        try:
+            for cid in report.ancestors(claim["id"]) - {claim["id"]}:
+                premise = report.claims[cid]
+                if premise["kind"] in {"事実", "実証結果"}:
+                    support.extend(str(ev["quote"] if "source" in ev else ev["value"])
+                                   for ev in premise["evidence"])
+        except ValueError as exc:
+            errors.append(str(exc))
+    if numbers(claim["text"]) - numbers(" ".join(support)):
         errors.append("本文に使う数値が引用・実証結果の値にない")
     return errors
 
@@ -381,42 +394,67 @@ def argument(report, cid):
                          for pid in sorted(row["premises"])]}
 
 
-def command_key(command, root):
+def command_key(command, root, inputs=()):
     try:
         parts = shlex.split(command)
     except ValueError as exc:
         raise CannotCheck("判定コマンドの引用符が不正") from exc
     if not parts:
         raise CannotCheck("空の判定コマンド")
-    files = []
-    # Only the executable and its immediate script argument are inputs. Later arguments
-    # can name output files (e.g. a call counter); hashing those invalidates every run.
-    for part in parts[:2]:
+    files = {}
+    # With explicit inputs, argument files may be outputs: only the executable is
+    # automatic. Otherwise inspect every argument, including scripts after options.
+    for part in parts[:1] if inputs else parts:
         path = Path(part) if Path(part).is_absolute() else root / part
-        if part == parts[0] and not path.is_file():
+        if not path.is_file():
             executable = shutil.which(part)
             if executable:
                 path = Path(executable)
         if path.is_file():
-            files.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            files[str(path.resolve())] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for value in inputs:
+        path = Path(value) if Path(value).is_absolute() else root / value
+        if not path.is_file():
+            raise CannotCheck(f"判定の入力ファイルがない: {value}")
+        files[str(path.resolve())] = hashlib.sha256(path.read_bytes()).hexdigest()
     return digest([command, files])
 
 
-def judge_one(command, payload, root):
+def valid_answer(answer):
+    return (isinstance(answer, dict) and isinstance(answer.get("verdict"), str)
+            and answer["verdict"] in VERDICTS and isinstance(answer.get("reason"), str)
+            and bool(answer["reason"].strip()))
+
+
+def save_cache(path, cache):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(cache, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def judge_one(command, payload, root, timeout=600):
     try:
         run = subprocess.run(shlex.split(command), input=json.dumps(payload, ensure_ascii=False),
-                             text=True, capture_output=True, cwd=root, timeout=120)
+                             text=True, capture_output=True, cwd=root, timeout=timeout)
         if run.returncode:
             raise CannotCheck(f"判定コマンドが終了コード{run.returncode}")
         answer = json.loads(run.stdout)
-        if not isinstance(answer, dict) or answer.get("verdict") not in VERDICTS or not isinstance(answer.get("reason"), str) or not answer["reason"].strip():
+        if not valid_answer(answer):
             raise CannotCheck("判定JSONはverdictと空でないreasonが必要")
         return {"verdict": answer["verdict"], "reason": answer["reason"]}
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise CannotCheck(f"判定コマンドの出力を確認できない ({type(exc).__name__})") from exc
 
 
-def logic(report, judges):
+def logic(report, judges, judge_inputs=(), judge_timeout=600):
     result = Results()
     graphs = {}
     for cid, row in report.claims.items():
@@ -476,7 +514,7 @@ def logic(report, judges):
         for key in ("hash", "reason", "approved_by"):
             if not need(entry, key, str, cid).strip():
                 raise CannotCheck(f"{cid}: 承認の{key}が空")
-    keys = [command_key(command, report.root) for command in judges]
+    keys = [command_key(command, report.root, judge_inputs) for command in judges]
     for cid, row in report.claims.items():
         if row["kind"] not in {"解釈", "提案"} or cid not in graphs:
             continue
@@ -492,26 +530,22 @@ def logic(report, judges):
             continue
         entry = cache.get(key, {})
         if not isinstance(entry, dict) or entry.get("judges") != keys or entry.get("argument") != payload:
-            entry = {"id": cid, "argument": payload, "judges": keys,
-                     "answers": [judge_one(command, payload, report.root) for command in judges]}
+            entry = {"id": cid, "argument": payload, "judges": keys, "answers": []}
             cache[key] = entry
         answers = entry.get("answers")
-        if not isinstance(answers, list) or len(answers) != len(judges) or any(
-            not isinstance(answer, dict) or answer.get("verdict") not in VERDICTS or not isinstance(answer.get("reason"), str)
-            for answer in answers
-        ):
+        if not isinstance(answers, list) or len(answers) > len(judges) or not all(map(valid_answer, answers)):
             raise CannotCheck("reviews/logic.jsonの判定形式が不正")
+        for command in judges[len(answers):]:
+            answers.append(judge_one(command, payload, report.root, judge_timeout))
+            save_cache(cache_path, cache)
         verdicts = [answer["verdict"] for answer in answers]
-        if "矛盾" in verdicts or verdicts == ["飛躍あり", "飛躍あり"]:
+        if "矛盾" in verdicts or all(v == "飛躍あり" for v in verdicts):
             verdict = "FAIL"
         elif all(v == "成立" for v in verdicts):
             verdict = "PASS"
         else:
             verdict = "PENDING"
         result.add(verdict, name, " / ".join(f"{a['verdict']}: {a['reason']}" for a in answers))
-    if judges:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
 
 
@@ -570,6 +604,7 @@ def mutate(report):
         print("FAIL mutate: 元のcoverageが不合格。誤りを仕込む前に修正する")
         return good.finish()
     derived = next((row for row in report.claims.values() if row["kind"] in {"解釈", "提案"} and row["premises"]), None)
+    interpretation = next((row for row in report.claims.values() if row["kind"] == "解釈"), None)
     fact = next((row for row in report.claims.values() if row["kind"] == "事実" and row["evidence"]), None)
     proposal = next((row for row in report.claims.values() if row["kind"] == "提案"), None)
     numeric = next(((file, line) for file, text in report.chapters.items() for line in text.splitlines()
@@ -578,8 +613,8 @@ def mutate(report):
                    if a["id"] != b["id"] and a["kind"] == b["kind"] == "提案"
                    and a["subject"] and a["subject"] == b["subject"]
                    and any(f"[{a['id']}]" in text and f"[{b['id']}]" not in text for text in report.chapters.values())), None)
-    if not all((derived, fact, proposal, numeric, shared)):
-        raise CannotCheck("mutateの題材が不足（前提・引用・数値・章をまたぐ同じ対象の提案が必要）")
+    if not all((derived, interpretation, fact, proposal, numeric, shared)):
+        raise CannotCheck("mutateの題材が不足（前提・解釈・引用・数値・章をまたぐ同じ対象の提案が必要）")
     stub = shlex.join([sys.executable, "-c", 'import json,sys; json.load(sys.stdin); print(json.dumps({"verdict":"成立","reason":"mutation stub"}))'])
     with tempfile.TemporaryDirectory(prefix="report-baseline-") as temp:
         root = Path(temp) / "report"
@@ -589,7 +624,7 @@ def mutate(report):
         print("FAIL mutate: 元のlogicが不合格")
         return base_logic.finish(strict=True)
     kinds = ("前提の主張を消す", "本文の数値を変える", "章の推奨を食い違わせる", "細部項目の記述を消す",
-             "引用を書き換える", "台帳にない文を足す", "事実に到達しない提案を作る")
+             "引用を書き換える", "台帳にない文を足す", "事実に到達しない提案を作る", "解釈に根拠のない数値を足す")
     result = Results()
     for index, name in enumerate(kinds):
         with tempfile.TemporaryDirectory(prefix="report-mutate-") as temp:
@@ -626,14 +661,22 @@ def mutate(report):
                 path = root / next(iter(report.chapters))
                 with path.open("a", encoding="utf-8") as stream:
                     stream.write("\n根拠なしに新しい方針を追加する。\n")
-            else:
+            elif index == 6:
                 row = next(row for row in rows if row["id"] == proposal["id"])
                 row["premises"] = ["C-mutation-orphan"]
                 rows.append({**copy.deepcopy(derived), "id": "C-mutation-orphan", "kind": "解釈", "premises": [], "evidence": []})
+            else:
+                row = next(row for row in rows if row["id"] == interpretation["id"])
+                old = row["text"]
+                row["text"] += "利用は987654件増える。"
+                for file in report.chapters:
+                    path = root / file
+                    path.write_text("\n".join(line.replace(old, row["text"]) if f"[{row['id']}]" in line else line
+                                               for line in path.read_text(encoding="utf-8").splitlines()) + "\n", encoding="utf-8")
             # Use a standard TOML inline table writer only for disposable mutation copies.
             (root / "claims.toml").write_text("claim = " + toml_value(rows) + "\n", encoding="utf-8")
             mutated = Report(root)
-            checked = coverage(mutated) if index in {1, 3, 4, 5} else logic(mutated, [stub, stub])
+            checked = coverage(mutated) if index in {1, 3, 4, 5, 7} else logic(mutated, [stub, stub])
             caught = any(row[0] == "FAIL" for row in checked.rows)
             result.add("PASS" if caught else "FAIL", name, f"{int(caught)}/1 caught/total")
     return result.finish()
@@ -649,6 +692,8 @@ def main():
             command.add_argument("--check-urls", action="store_true")
         if name == "logic":
             command.add_argument("--judge", action="append", default=[])
+            command.add_argument("--judge-input", action="append", default=[])
+            command.add_argument("--judge-timeout", type=float, default=600)
             command.add_argument("--strict", action="store_true")
         if name == "build":
             command.add_argument("--out", type=Path, required=True)
@@ -670,7 +715,9 @@ def main():
         if args.command == "logic":
             if len(args.judge) > 2:
                 raise CannotCheck("--judgeは2つまで")
-            return logic(report, args.judge).finish(args.strict)
+            if not math.isfinite(args.judge_timeout) or args.judge_timeout <= 0:
+                raise CannotCheck("--judge-timeoutは正の有限な秒数が必要")
+            return logic(report, args.judge, args.judge_input, args.judge_timeout).finish(args.strict)
         if args.command == "build":
             return build(report, args.out)
         return mutate(report)

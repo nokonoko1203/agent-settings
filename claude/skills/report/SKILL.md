@@ -30,7 +30,7 @@ description: "調査業務の報告書を、要求と細部項目の承認、原
 
 判定の指示は[prompts/judge.md](prompts/judge.md)。コマンドの標準入力に論証JSONを渡し、標準出力から判定JSONだけを読む。実モデルの実行には当該業務の許可と接続が必要である。検証ではモデルを呼ばず、架空例のスタブを使う。
 
-以下はラッパーの例である。`REPORT_SKILL`をスキル配置先の絶対パスに設定する。ラッパーは業務ルート外に置ける。Codexの進行イベントは最終回答ではないため、`--json`のイベント列をそのまま判定出力にしない。
+以下はラッパーの例である。`REPORT_SKILL`をスキル配置先の絶対パスに設定し、exportする。ラッパーは業務ルート外に置ける。Codexの進行イベントは最終回答ではないため、`--json`のイベント列をそのまま判定出力にしない。
 
 ```sh
 #!/bin/sh
@@ -49,18 +49,25 @@ claude -p --tools '' --strict-mcp-config --output-format text \
 ```
 
 ```sh
-make test-logic JUDGES="--judge './judge-codex' --judge './judge-claude'"
+make test-logic REPORT_SKILL="$REPORT_SKILL" \
+  JUDGES="--judge './judge-codex' --judge './judge-claude'" \
+  JUDGE_INPUTS="--judge-input '$REPORT_SKILL/prompts/judge.md' --judge-input './judge-codex' --judge-input './judge-claude'"
 ```
 
-CLIの引数は導入済み版の`codex exec --help`と`claude --help`でも確認する。通常運用は2判定。未指定はPENDINGになる。`--strict`はPENDINGもFAILとして終了コード1にする。判定が両方とも飛躍あり、または一方が矛盾ならFAIL。判定コマンドの異常は終了コード2である。
+`--judge-input`未指定では、コマンド引数中の実在するファイルとPATH上の実行ファイルをすべてハッシュする。指定した場合は、実行ファイルと明示した全入力だけをハッシュする。`--counter`等の出力を引数に含むコマンドでは、スクリプト・指示文・設定等の入力を漏れなく列挙する。2つの判定コマンドに共通の入力一覧として使う。Makefileの雛形は指示文を入力に指定する。Pythonでラッパーを起動するなら、そのスクリプトも`JUDGE_INPUTS`に足す。
+
+CLIの引数は導入済み版の`codex exec --help`と`claude --help`でも確認する。通常運用は2判定。2つとも成立ならPASS、両方が飛躍あり、または一方でも矛盾ならFAIL。成立と飛躍ありに割れたらPENDING。1判定では成立だけがPASSで、飛躍あり・矛盾はFAIL。未指定はPENDINGになる。`--strict`はPENDINGも終了コード1にする。判定コマンドの異常は終了コード2である。
+
+判定は1回済むごとに保存する。途中で失敗しても、同じ入力・同じコマンドで再実行すると未完了の判定から再開する。1回の判定の時間上限は`--judge-timeout`（秒、既定600）で変えられる。Makefileでは`JUDGE_TIMEOUT`に指定する。
 
 ## 架空例による自己確認
 
 ```sh
 python3 claude/bin/report-check coverage --root claude/skills/report/examples/harunagi
 python3 claude/bin/report-check logic --root claude/skills/report/examples/harunagi \
-  --judge 'python3 judge_stub.py' --judge 'python3 judge_stub.py' --strict
+  --judge 'python3 judge_stub.py' --judge 'python3 judge_stub.py' \
+  --judge-input judge_stub.py --strict
 python3 claude/bin/report-check mutate --root claude/skills/report/examples/harunagi
 ```
 
-スタブはJSONを読んで定型の判定を返すだけで、推論の品質は証明しない。`mutate`は7種類の検出率を`caught/total`で示し、元の台帳や本文を変更しない。運用開始時と検査の道具を変えたときに実行する。
+スタブはJSONを読んで定型の判定を返すだけで、推論の品質は証明しない。`mutate`は解釈に根拠のない数値を足すケースを含む8種類の検出率を`caught/total`で示し、元の台帳や本文を変更しない。運用開始時と検査の道具を変えたときに実行する。
