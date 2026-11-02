@@ -7,8 +7,9 @@ Returns "allow" when the whole command is git invocations (optionally `cd <dir>`
 read-only subcommands, or a mutating subcommand whose options are all listed in SPECS and whose
 arguments pass its check. Returns "deny" when a push writes a protected branch, "ask" when a push
 may write one (mirror remote, configured push refspecs, push.default=matching), and "ask" when
-rebase/rm runs while HEAD is protected. `worktree remove` without --force and `branch -d` of
-an unprotected branch are also allowed while HEAD is protected; git refuses to drop tracked,
+rebase/rm runs while HEAD is protected. `switch -c`/`checkout -b` that create an unprotected
+branch at HEAD (no start point), `worktree remove` without --force and `branch -d` of an unprotected branch are also
+allowed while HEAD is protected; git refuses to drop tracked,
 untracked or unmerged work in those forms, though ignored files in the worktree are deleted. A
 command may continue after `worktree remove` only if every later separator is `&&`.
 Everything else gets no decision and falls through to the normal permission flow: shell expansion,
@@ -320,6 +321,19 @@ def deletes_unprotected(sub, args):
     return bool(pos) and pos[0] == "remove" and not opts
 
 
+def creates_unprotected(sub, args):
+    """True for `switch -c <name>` and `checkout -b <name>` that create an unprotected branch at HEAD.
+
+    A start point is not allowed: switching trees can silently overwrite ignored files.
+    """
+    if sub not in ("switch", "checkout"):
+        return False
+    flags, values, _ = SPECS[sub]
+    opts, pos = parse(args, flags, values)
+    names = opts.get("-c", []) + opts.get("--create", []) if sub == "switch" else opts.get("-b", [])
+    return len(names) == 1 and not is_protected_ref(names[0]) and not pos
+
+
 def check_read_only(args):
     for arg in args:
         name = arg.partition("=")[0]
@@ -375,7 +389,7 @@ def decide(command, cwd):
                 if RANK["ask"] > RANK[decision]:
                     decision = "ask"
                 continue
-            if not deletes_unprotected(sub, args):
+            if not deletes_unprotected(sub, args) and not creates_unprotected(sub, args):
                 # Keep the normal flow on the protected branch (block-main-commit.py blocks commits).
                 raise Undecided
         if sub in READ_ONLY:
