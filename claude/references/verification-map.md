@@ -13,10 +13,10 @@
 機能ファイルの`サブ機能`（英語では`Sub-features`）の箇条書きの各行の末尾に、確認手段の札を1つ以上付ける。4つのH2の名前と順序は変えない。
 
 ```markdown
-- `layers-count`: パネルに件数と取得時刻を出す ［e2e: atis-initial-counts］
-- `layers-initial`: 開いた直後に渋滞と規制を取得して描く ［手動: 線の描画を操作前後の画像で見る］
-- `toggle-congestion`: 渋滞の表示を切り替える ［e2e(関連部品の無効化): atis-toggle-disabled］ ［手動(線の非表示): 操作前後の画像で見る］
-- `cond-area`: 範囲外で案内を出す ［未確認: 中心を範囲外へ動かす安定した操作がまだない］
+- `note-save`: 題名と本文を入れて保存すると、一覧の先頭に出る ［e2e: notes-save］
+- `note-color`: メモに色を付ける ［手動: 一覧の色を操作前後の画像で見る］
+- `note-title-required`: 題名が空なら保存せずに理由を出す ［e2e(理由の表示): notes-title-required］ ［手動(入力欄の強調): 操作前後の画像で見る］
+- `note-attach`: ファイルを添付する ［未確認: ファイル置き場のモックがまだない］
 ```
 
 - 形は`［種類: 内容］`。括弧は全角の`［］`を使い、説明の中では使わない。
@@ -33,7 +33,7 @@
 Playwrightのテストに、ケースIDをタグで1つ付ける。テスト名は自由に変えてよく、IDは変えない。
 
 ```typescript
-test('開くと渋滞と規制の件数が出る', { tag: '@case:atis-initial-counts' }, async ({ page }) => {
+test('題名と本文を入れて保存すると、一覧の先頭に出る', { tag: '@case:notes-save' }, async ({ page }) => {
 	// ...
 });
 ```
@@ -54,10 +54,10 @@ SvelteKit用の抽出器が拾うもの:
 | 種類 | 拾うもの | キーの例 |
 |---|---|---|
 | `route` | `+page.svelte`（`+page@….svelte`を含む）の画面。`(group)`はパスから外し、`[id]`などは書いたまま残す | `route:/items/[id]` |
-| `api` | `+server.ts`・`+server.js`が書き出すHTTPメソッド | `api:GET /api/traffic` |
+| `api` | `+server.ts`・`+server.js`が書き出すHTTPメソッド | `api:POST /api/notes` |
 | `action` | `+page.server.ts`の`actions`の名前 | `action:/items?/save` |
-| `ui` | `.svelte`の要素の`on*`属性、コンポーネントの`on*`属性（`onSave`のような大文字を含む名前も）、`on:`ディレクティブ、フォーム要素の`bind:value`・`bind:checked`・`bind:group`・`bind:files` | `ui:src/routes/+page.svelte#input[渋滞（VICS）].bind:checked` |
-| `call` | 画面側のコード（サーバー専用のファイルを除く）の`fetch`で、宛先が`/`で始まり、`?`より前のパスとメソッドが静的に決まるもの | `call:src/lib/traffic/loader.svelte.ts#GET /api/traffic` |
+| `ui` | `.svelte`の要素の`on*`属性、コンポーネントの`on*`属性（`onSave`のような大文字を含む名前も）、`on:`ディレクティブ、フォーム要素の`bind:value`・`bind:checked`・`bind:group`・`bind:files` | `ui:src/routes/notes/+page.svelte#input[題名].bind:value` |
+| `call` | 画面側のコード（サーバー専用のファイルを除く）の`fetch`で、宛先が`/`で始まり、`?`より前のパスとメソッドが静的に決まるもの | `call:src/lib/notes/api.ts#POST /api/notes` |
 | `link` | `<a href>`と`goto()`の内部の遷移先 | `link:src/routes/+page.svelte#/about` |
 
 - `ui`の`[名前]`は、`aria-label`、`id`、`name`、要素の中の固定の文字、包んでいる`<label>`の文字の順に取る。名前がなくても、同じファイルで要素と操作の組が1つなら、名前なしのキーにする。
@@ -74,23 +74,30 @@ SvelteKit用の抽出器が拾うもの:
 {
   "scenarios": [
     {
-      "id": "atis-refresh",
-      "title": "「更新」を押すと渋滞と規制を取り直し、取得時刻が進む",
+      "id": "notes-save",
+      "title": "題名と本文を入れて保存すると一覧の先頭に出て、開き直しても残る",
       "status": "implemented",
-      "aspects": ["normal"],
-      "covers": ["ui:src/routes/+page.svelte#button.onclick", "call:src/lib/traffic/loader.svelte.ts#GET /api/traffic"]
+      "aspects": ["normal", "persist"],
+      "covers": ["ui:src/routes/notes/+page.svelte#button[保存].onclick", "call:src/lib/notes/api.ts#POST /api/notes", "api:POST /api/notes"]
     },
     {
-      "id": "shop-cart-save",
-      "title": "カートに入れて開き直しても残る",
+      "id": "notes-title-required",
+      "title": "題名が空なら保存せずに理由を出し、メモは増えない",
+      "status": "implemented",
+      "aspects": ["invalid-input"],
+      "covers": ["api:POST /api/notes"]
+    },
+    {
+      "id": "notes-attach",
+      "title": "ファイルを添付して保存すると、メモにファイル名が出る",
       "status": "pending",
-      "reason": "ログインのモックがまだない",
+      "reason": "ファイル置き場のモックがまだない",
       "aspects": ["normal", "persist"],
-      "covers": ["action:/cart?/add"]
+      "covers": ["ui:src/routes/notes/+page.svelte#input[添付].bind:files"]
     }
   ],
   "exceptions": [
-    { "key": "ui:src/routes/+page.svelte#input[渋滞なし・不明も表示].bind:checked", "kind": "manual", "feature": "layer-toggles.md", "reason": "結果が線の色だけで、e2eで観測できない" }
+    { "key": "ui:src/routes/notes/+page.svelte#input[色].bind:value", "kind": "manual", "feature": "notes.md", "reason": "結果が一覧の色だけで、e2eで観測できない" }
   ]
 }
 ```
