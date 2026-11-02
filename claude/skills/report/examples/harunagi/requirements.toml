@@ -1,0 +1,60 @@
+# すべて説明用。架空の確認者は実務の承認を表さない。
+approved_by = "架空例の確認者"
+approved_at = "2026-11-03"
+
+[[requirement]]
+id = "R1"
+source = "架空仕様書 第1項"
+text = "現状と試行結果を整理する"
+kind = "評価"
+chapter = "01"
+depends_on = []
+expect = [{ kinds = ["事実"], min = 1 }, { kinds = ["実証結果"], min = 1 }]
+
+[[requirement.item]]
+id = "R1-a"
+text = "対象施設と受付"
+expect = [{ kinds = ["事実"], min = 1 }]
+
+[[requirement.item]]
+id = "R1-b"
+text = "試行の待ち時間"
+expect = [{ kinds = ["実証結果"], min = 1 }]
+
+[[requirement]]
+id = "R2"
+source = "架空仕様書 第2項"
+text = "方式を比較し試行結果を踏まえて提案する"
+kind = "提案"
+chapter = "01"
+depends_on = ["R1"]
+expect = [{ kinds = ["提案"], min = 1 }]
+
+[[requirement.item]]
+id = "R2-a"
+text = "方式の比較と選択"
+expect = [{ kinds = ["提案"], min = 1 }, { kinds = ["解釈", "事実"], min = 1 }]
+
+[[requirement.item]]
+id = "R2-b"
+text = "操作案内の課題"
+expect = [{ kinds = ["提案"], min = 1 }, { kinds = ["解釈", "事実"], min = 1 }]
+
+[[requirement]]
+id = "R3"
+source = "架空仕様書 第3項"
+text = "更新後の運用を示す"
+kind = "提案"
+chapter = "02"
+depends_on = ["R1"]
+expect = [{ kinds = ["提案"], min = 1 }]
+
+[[requirement.item]]
+id = "R3-a"
+text = "推奨方式を運用へ反映"
+expect = [{ kinds = ["提案"], min = 1 }, { kinds = ["解釈", "事実"], min = 1 }]
+
+[[requirement.item]]
+id = "R3-b"
+text = "試行後の確認指標"
+expect = [{ kinds = ["提案"], min = 1 }, { kinds = ["解釈", "事実"], min = 1 }]

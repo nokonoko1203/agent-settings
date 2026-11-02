@@ -1,0 +1,190 @@
+[[claim]]
+id = "C1-001"
+req = ["R1-a"]
+kind = "事実"
+text = "対象施設は3施設である。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S1"
+page = "1"
+quote = "対象施設は3施設である。"
+
+[[claim]]
+id = "C1-002"
+req = ["R1-a"]
+kind = "事実"
+text = "受付は窓口方式である。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S1"
+page = "1"
+quote = "受付は窓口方式である。"
+
+[[claim]]
+id = "C1-003"
+req = ["R1-b"]
+kind = "実証結果"
+text = "試行の待ち時間は12分である。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = "試行の待ち時間"
+[[claim.evidence]]
+path = "artifacts/trial.txt"
+value = "待ち時間=12分"
+
+[[claim]]
+id = "C1-004"
+req = ["R2-a"]
+kind = "事実"
+text = "比較の対象は窓口方式とオンライン方式である。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S2"
+page = "1"
+quote = "比較の対象は窓口方式とオンライン方式である。"
+
+[[claim]]
+id = "C1-005"
+req = ["R2-a", "R3-a"]
+kind = "事実"
+text = "オンライン方式は来庁せず申請できる。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S2"
+page = "1"
+quote = "オンライン方式は来庁せず申請できる。"
+
+[[claim]]
+id = "C1-006"
+req = ["R2-a"]
+kind = "事実"
+text = "受付経路を増やすことを選択の基準とする。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S2"
+page = "1"
+quote = "受付経路を増やすことを選択の基準とする。"
+
+[[claim]]
+id = "C1-007"
+req = ["R2-a"]
+kind = "解釈"
+text = "オンライン方式は受付経路を増やす基準に合う。"
+status = "裏取り済み"
+premises = ["C1-002", "C1-005", "C1-006"]
+alternatives = []
+subject = ""
+evidence = []
+
+[[claim]]
+id = "C1-008"
+req = ["R2-a"]
+kind = "提案"
+text = "オンライン方式を推奨する。"
+status = "裏取り済み"
+premises = ["C1-003", "C1-007"]
+alternatives = ["窓口方式のみを維持する"]
+subject = "予約受付の推奨方式"
+evidence = []
+
+[[claim]]
+id = "C1-009"
+req = ["R2-b"]
+kind = "事実"
+text = "オンライン方式では操作案内を用意する。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S2"
+page = "1"
+quote = "オンライン方式では操作案内を用意する。"
+
+[[claim]]
+id = "C1-010"
+req = ["R2-b"]
+kind = "提案"
+text = "操作案内を更新の準備に含める。"
+status = "裏取り済み"
+premises = ["C1-003", "C1-009"]
+alternatives = ["操作案内を用意しない"]
+subject = ""
+evidence = []
+
+[[claim]]
+id = "C2-001"
+req = ["R3-a"]
+kind = "提案"
+text = "オンライン方式を推奨する。"
+status = "裏取り済み"
+premises = ["C1-003", "C1-007"]
+alternatives = ["窓口方式のみを維持する"]
+subject = "予約受付の推奨方式"
+evidence = []
+
+[[claim]]
+id = "C2-002"
+req = ["R3-b"]
+kind = "事実"
+text = "試行では待ち時間を測る。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S3"
+page = "1"
+quote = "試行では待ち時間を測る。"
+
+[[claim]]
+id = "C2-003"
+req = ["R3-b"]
+kind = "事実"
+text = "試行の目標は待ち時間を15分以下にすることである。"
+status = "裏取り済み"
+premises = []
+alternatives = []
+subject = ""
+[[claim.evidence]]
+source = "S3"
+page = "1"
+quote = "試行の目標は待ち時間を15分以下にすることである。"
+
+[[claim]]
+id = "C2-004"
+req = ["R3-b"]
+kind = "解釈"
+text = "試行の待ち時間は目標の範囲内である。"
+status = "裏取り済み"
+premises = ["C1-003", "C2-003"]
+alternatives = []
+subject = ""
+evidence = []
+
+[[claim]]
+id = "C2-005"
+req = ["R3-b"]
+kind = "提案"
+text = "更新後も待ち時間を確認指標とする。"
+status = "裏取り済み"
+premises = ["C1-003", "C2-002", "C2-004"]
+alternatives = ["確認指標を設けない"]
+subject = ""
+evidence = []

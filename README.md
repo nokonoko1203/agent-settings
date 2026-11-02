@@ -26,7 +26,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 ├── claude/                 # ~/.claude/ に展開する
 │   ├── CLAUDE.md
 │   ├── settings.json       # hook・権限・環境変数
-│   ├── bin/                # harness-log, harness-report, harness-install, verify-map, e2e-inventory-sveltekit.ts
+│   ├── bin/                # harness-log, harness-report, harness-install, verify-map, report-check, e2e-inventory-sveltekit.ts
 │   ├── hooks/
 │   ├── references/         # evidence.mdの形式、機能一覧の確認手段の書き方など
 │   ├── rules/
@@ -46,7 +46,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 | ツール | 用途 |
 |---|---|
 | `uv` | `harness-report`・`harness-install`の実行 |
-| `python3` | Python製hookと`verify-map`の実行 |
+| `python3` | Python製hookと`verify-map`の実行。`report-check`は3.11以上、標準ライブラリのみ |
 | `bun` | `e2e-inventory-sveltekit.ts`（SvelteKitのe2eの確認対象の抽出）の実行。対象のプロジェクトの`svelte`と`typescript`を使う |
 | `jq` | hookでのJSON処理 |
 | `make` | `stop-check.sh`が`make check`を実行する |
@@ -112,7 +112,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 
 | 段階 | スキル | 内容 |
 |---|---|---|
-| 進め方 | `playbook` | 不具合の修正・機能の追加・リファクタリング・性能の改善・調査の手順書 |
+| 進め方 | `playbook` | 不具合の修正・機能の追加・リファクタリング・性能の改善・調査・文書作成の手順書 |
 | 調査 | `imozuru` | 関連する用語・人・場を芋づる式にたどり、原文を集める |
 | 調査 | `research` | 技術選定や仕様比較を根拠付きで`.tmp/research/`にまとめる |
 | 調査 | `how` | 既存のコードが今どう動いているかを説明する |
@@ -130,6 +130,9 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
 | 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
 | 文書 | `yomiyasu` | AIが生成した日本語を推敲する |
+| 文書 | `report` | 要求・出典・主張の台帳、章の本人確認、網羅と論理の検査、脚注付きMarkdownの生成 |
+
+報告書の雛形と台帳の定義は[report](claude/skills/report/SKILL.md)にあります。`report-check coverage`で細部項目と根拠、`logic`で論証、`build`で脚注への置換、`mutate`で検査そのものを確かめます。通信しない[架空例](claude/skills/report/examples/harunagi/)も同梱しています。
 
 ## プロジェクトのリポジトリに入れる
 

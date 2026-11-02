@@ -1,0 +1,4 @@
+# 候補を記入し、本人の承認後に承認者と日付を入れる。
+approved_by = ""
+approved_at = ""
+requirement = []

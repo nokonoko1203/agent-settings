@@ -1,0 +1,683 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Report ledger checks. Standard library only. Exit: 0 pass, 1 fail, 2 unable to check."""
+
+import argparse
+import copy
+import datetime
+import hashlib
+import json
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+import unicodedata
+import urllib.error
+import urllib.request
+from collections import Counter
+from pathlib import Path
+
+KINDS = {"事実", "解釈", "提案", "実証結果"}
+VERDICTS = {"成立", "飛躍あり", "矛盾"}
+MARK = re.compile(r"\[(C[\w-]+)\]")
+
+
+class CannotCheck(Exception):
+    pass
+
+
+def norm(text):
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text)))
+
+
+def numbers(text):
+    return set(re.findall(r"(?<![0-9.])[+-]?\d+(?:,\d{3})*(?:\.\d+)?", norm(text)))
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def local(root, rel):
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
+        raise CannotCheck("パスは業務ルートからの相対パスが必要")
+    path = (root / rel).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise CannotCheck(f"ルート外のパス: {rel}")
+    return path
+
+
+def read_toml(path):
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise CannotCheck(f"{path.name}: 台帳を読めない ({type(exc).__name__})") from exc
+
+
+def need(row, key, typ, where):
+    value = row.get(key)
+    if not isinstance(value, typ):
+        raise CannotCheck(f"{where}: {key} の型または必須項目を確認")
+    return value
+
+
+def texts(row, key, where):
+    values = need(row, key, list, where)
+    if not all(isinstance(x, str) and x for x in values):
+        raise CannotCheck(f"{where}: {key} は文字列の配列が必要")
+    return values
+
+
+def indexed(data, key, file):
+    rows = need(data, key, list, file)
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise CannotCheck(f"{file}: {key} はテーブルの配列が必要")
+        ident = need(row, "id", str, file)
+        if not ident or ident in result:
+            raise CannotCheck(f"{file}: IDが空または重複: {ident}")
+        result[ident] = row
+    return result
+
+
+def expectation(row, where):
+    rules = need(row, "expect", list, where)
+    if not rules:
+        raise CannotCheck(f"{where}: expect が空")
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise CannotCheck(f"{where}: expect は {{kinds, min}} の配列が必要")
+        kinds = texts(rule, "kinds", where)
+        minimum = need(rule, "min", int, where)
+        if not kinds or not set(kinds) <= KINDS or minimum < 1 or isinstance(minimum, bool):
+            raise CannotCheck(f"{where}: expect の種類または件数が不正")
+    return rules
+
+
+class Report:
+    def __init__(self, root):
+        self.root = root.resolve()
+        self.requirements_data = read_toml(root / "requirements.toml")
+        self.requirements = indexed(self.requirements_data, "requirement", "requirements.toml")
+        self.sources = indexed(read_toml(root / "sources.toml"), "source", "sources.toml")
+        self.claims = indexed(read_toml(root / "claims.toml"), "claim", "claims.toml")
+        self.terms = need(read_toml(root / "glossary.toml"), "term", list, "glossary.toml")
+        self.items = {}
+        for rid, row in self.requirements.items():
+            for key in ("source", "text", "kind", "chapter"):
+                need(row, key, str, rid)
+            if row["kind"] not in {"実施", "整理", "提案", "評価"}:
+                raise CannotCheck(f"{rid}: 要求のkindが不正")
+            texts(row, "depends_on", rid)
+            expectation(row, rid)
+            items = indexed(row, "item", rid)
+            if not items:
+                raise CannotCheck(f"{rid}: 細部項目が空")
+            for iid, item in items.items():
+                if iid in self.items:
+                    raise CannotCheck(f"{iid}: 細部項目IDが重複")
+                need(item, "text", str, iid)
+                expectation(item, iid)
+                self.items[iid] = (rid, item)
+        for sid, row in self.sources.items():
+            for key in ("title", "publisher", "version", "url", "sha256", "reliability", "path"):
+                need(row, key, str, sid)
+            for key in ("published", "retrieved"):
+                need(row, key, (str, datetime.date), sid)
+            if row["reliability"] not in {"一次", "二次", "報道"}:
+                raise CannotCheck(f"{sid}: reliabilityが不正")
+        for cid, row in self.claims.items():
+            if not MARK.fullmatch(f"[{cid}]"):
+                raise CannotCheck(f"{cid}: 主張IDはCから始める")
+            for key in ("kind", "text", "status", "subject"):
+                need(row, key, str, cid)
+            if row["kind"] not in KINDS:
+                raise CannotCheck(f"{cid}: 主張のkindが不正")
+            if row["status"] not in {"未確認", "裏取り済み", "反証あり", "人の判断待ち"}:
+                raise CannotCheck(f"{cid}: statusが不正")
+            for key in ("req", "premises", "alternatives"):
+                texts(row, key, cid)
+            for ev in need(row, "evidence", list, cid):
+                if not isinstance(ev, dict):
+                    raise CannotCheck(f"{cid}: evidenceはテーブルの配列が必要")
+                if "source" in ev:
+                    for key in ("source", "quote"):
+                        need(ev, key, str, cid)
+                    need(ev, "page", (str, int), cid)
+                elif "path" in ev:
+                    need(ev, "path", str, cid)
+                    need(ev, "value", (str, int, float), cid)
+                else:
+                    raise CannotCheck(f"{cid}: evidenceはsourceまたはpathが必要")
+        for term in self.terms:
+            if not isinstance(term, dict):
+                raise CannotCheck("glossary.toml: termはテーブルが必要")
+            need(term, "correct", str, "glossary.toml")
+            texts(term, "wrong", "glossary.toml")
+        self.chapters = {}
+        for path in sorted((root / "chapters").glob("*.md")):
+            self.chapters[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+        if not self.requirements or not self.claims or not self.chapters:
+            raise CannotCheck("要求・主張・章のいずれかが空")
+        self.locations = {}
+        groups = {"requirements.toml": [*self.requirements, *self.items],
+                  "sources.toml": self.sources, "claims.toml": self.claims}
+        for filename, ids in groups.items():
+            for ident in ids:
+                self.locations[ident] = f"{filename}:1"
+            for line, text in enumerate((root / filename).read_text(encoding="utf-8").splitlines(), 1):
+                for match in re.finditer(r'''\bid\s*=\s*["']([^"']+)["']''', text):
+                    if match[1] in ids:
+                        self.locations[match[1]] = f"{filename}:{line}"
+
+    def where(self, ident):
+        return f"{ident} ({self.locations.get(ident, '台帳')})"
+
+    def ancestors(self, cid, visiting=()):
+        if cid in visiting:
+            raise ValueError("前提が循環: " + " -> ".join((*visiting, cid)))
+        if cid not in self.claims:
+            raise ValueError(f"前提の主張がない: {cid}")
+        row = self.claims[cid]
+        if row["kind"] in {"解釈", "提案"} and not row["premises"]:
+            raise ValueError(f"{cid}: 前提がなく事実・実証結果に到達しない")
+        found = {cid}
+        for premise in row["premises"]:
+            found |= self.ancestors(premise, (*visiting, cid))
+        return found
+
+
+class Results:
+    def __init__(self):
+        self.rows = []
+
+    def add(self, verdict, name, reason):
+        self.rows.append((verdict, name, reason))
+
+    def check(self, name, errors):
+        self.add("FAIL" if errors else "PASS", name, "; ".join(errors) if errors else "確認済み")
+
+    def finish(self, strict=False):
+        for verdict, name, reason in self.rows:
+            print(f"{verdict} {name}: {reason}")
+        counts = Counter(row[0] for row in self.rows)
+        print(f"=== {counts['PASS']} PASS, {counts['FAIL']} FAIL, {counts['PENDING']} PENDING ===")
+        return int(bool(counts["FAIL"] or (strict and counts["PENDING"])))
+
+
+def source_errors(report, source):
+    errors = []
+    for key in ("title", "publisher", "version", "url", "sha256", "path"):
+        if not source[key].strip():
+            errors.append(f"{key}が空")
+    for key in ("published", "retrieved"):
+        try:
+            datetime.date.fromisoformat(str(source[key]))
+        except ValueError:
+            errors.append(f"{key}は日付が必要")
+    if not re.match(r"https?://[^/\s]+", source["url"]):
+        errors.append("URLはhttp(s)が必要")
+    path = local(report.root, source["path"])
+    if not Path(source["path"]).parts or Path(source["path"]).parts[0] != "sources":
+        errors.append("原文はsources/に保存する")
+    if not path.is_file():
+        errors.append(f"原文がない: {source['path']}")
+    elif hashlib.sha256(path.read_bytes()).hexdigest() != source["sha256"]:
+        errors.append("原文のsha256が一致しない")
+    if path.suffix.lower() == ".pdf" and not path.with_suffix(".txt").is_file():
+        errors.append("PDFのテキストがない")
+    return errors
+
+
+def claim_errors(report, claim):
+    errors = []
+    kind = claim["kind"]
+    if not claim["text"].strip() or not claim["req"]:
+        errors.append("textまたはreqが空")
+    if claim["status"] != "裏取り済み":
+        errors.append(f"裏取りが未完了: {claim['status']}")
+    for iid in claim["req"]:
+        if iid not in report.items:
+            errors.append(f"未知の細部項目: {iid}")
+    if kind == "事実" and not any("source" in ev for ev in claim["evidence"]):
+        errors.append("事実には原文の引用が必要")
+    if kind == "実証結果" and not any("path" in ev for ev in claim["evidence"]):
+        errors.append("実証結果には成果物のpathとvalueが必要")
+    if kind in {"解釈", "提案"} and not claim["premises"]:
+        errors.append("前提の主張が必要")
+    for pid in claim["premises"]:
+        if pid not in report.claims:
+            errors.append(f"前提の主張がない: {pid}")
+    if kind == "提案" and not claim["alternatives"]:
+        errors.append("比較した代替案が必要")
+    support = []
+    for ev in claim["evidence"]:
+        if "source" in ev:
+            sid = ev["source"]
+            if sid not in report.sources:
+                errors.append(f"未知の出典: {sid}")
+                continue
+            path = local(report.root, report.sources[sid]["path"])
+            if path.suffix.lower() == ".pdf":
+                path = path.with_suffix(".txt")
+            if not path.is_file():
+                errors.append(f"{sid}: 引用用テキストがない")
+            elif not norm(ev["quote"]) or norm(ev["quote"]) not in norm(path.read_text(encoding="utf-8")):
+                errors.append(f"{sid} p.{ev['page']}: 引用が原文に存在しない")
+            if not str(ev["page"]).strip() or not str(ev["quote"]).strip():
+                errors.append(f"{sid}: pageとquoteが必要")
+            support.append(ev["quote"])
+        else:
+            path = local(report.root, ev["path"])
+            if not path.is_file():
+                errors.append(f"成果物がない: {ev['path']}")
+            elif not norm(ev["value"]) or norm(ev["value"]) not in norm(path.read_text(encoding="utf-8")):
+                errors.append(f"成果物のvalueが一致しない: {ev['path']}")
+            support.append(str(ev["value"]))
+    if kind in {"事実", "実証結果"} and numbers(claim["text"]) - numbers(" ".join(support)):
+        errors.append("本文に使う数値が引用・実証結果の値にない")
+    return errors
+
+
+def body_checks(report, result):
+    used = set()
+    figures, refs = {}, []
+    for filename, text in report.chapters.items():
+        for line, raw in enumerate(text.splitlines(), 1):
+            where = f"{filename}:{line}"
+            for term in report.terms:
+                for wrong in term["wrong"]:
+                    if wrong in raw:
+                        result.add("FAIL", where, f"表記 {wrong} → {term['correct']}")
+            caption = re.match(r"^(図|表)(\d+)[:：]\s*", raw)
+            if caption:
+                key = caption.group(1) + caption.group(2)
+                if key in figures:
+                    result.add("FAIL", where, f"図表番号が重複: {key}")
+                figures[key] = where
+            else:
+                refs.extend((m.group(), where) for m in re.finditer(r"(?:図|表)\d+", raw))
+            if not raw.strip() or re.match(r"^#{1,6}\s", raw) or re.fullmatch(r"\s*<!--.*-->\s*", raw):
+                continue
+            ids = MARK.findall(raw)
+            errors = []
+            if not ids:
+                errors.append("主張IDのない文")
+            missing = [cid for cid in ids if cid not in report.claims]
+            if missing:
+                errors.append("台帳にない主張: " + ", ".join(missing))
+            else:
+                expected = "".join(report.claims[cid]["text"] for cid in ids)
+                body = re.sub(r"^\s*(?:[-*+]\s+|\d+\.\s+)", "", MARK.sub("", raw))
+                if norm(body) != norm(expected):
+                    errors.append("台帳と本文が不一致（数値・推奨・未登録の文を確認）: " + ", ".join(ids))
+            result.check(where, errors)
+            used.update(ids)
+    for key, where in refs:
+        if key not in figures:
+            result.add("FAIL", where, f"参照先の図表がない: {key}")
+    referenced = {key for key, _ in refs}
+    for key, where in figures.items():
+        if key not in referenced:
+            result.add("FAIL", where, f"本文から図表への参照がない: {key}")
+    for kind in ("図", "表"):
+        seq = sorted(int(key[1:]) for key in figures if key.startswith(kind))
+        if seq and seq != list(range(1, len(seq) + 1)):
+            result.add("FAIL", "図表番号", f"{kind}の番号が連続していない")
+    return used
+
+
+def coverage(report, check_urls=False):
+    result = Results()
+    used = body_checks(report, result)
+    errors_by_source = {sid: source_errors(report, source) for sid, source in report.sources.items()}
+    errors_by_claim = {cid: claim_errors(report, row) for cid, row in report.claims.items()}
+    for cid, row in report.claims.items():
+        for ev in row["evidence"]:
+            if ev.get("source") in errors_by_source and errors_by_source[ev["source"]]:
+                errors_by_claim[cid].append(f"出典{ev['source']}の版・取得日・原文等が不正")
+    for cid, errors in errors_by_claim.items():
+        result.check(report.where(cid), errors)
+    for sid, source in report.sources.items():
+        result.check(report.where(sid), errors_by_source[sid])
+        if check_urls:
+            try:
+                with urllib.request.urlopen(urllib.request.Request(source["url"], method="HEAD"), timeout=15) as response:
+                    result.check(f"{sid} URL", [] if response.status < 400 else ["URLの確認に失敗"])
+            except (OSError, urllib.error.URLError) as exc:
+                raise CannotCheck(f"{sid}: URLを確認できない ({type(exc).__name__})") from exc
+    for iid, (rid, item) in report.items.items():
+        req = report.requirements[rid]
+        matching = [row for cid, row in report.claims.items() if iid in row["req"] and cid in used
+                    and any(MARK.search(line) and f"[{cid}]" in line
+                            for file, text in report.chapters.items() if Path(file).name.startswith(req["chapter"])
+                            for line in text.splitlines())]
+        errors = []
+        for rule in item["expect"]:
+            count = sum(row["kind"] in rule["kinds"] and not errors_by_claim[row["id"]] for row in matching)
+            if count < rule["min"]:
+                errors.append(f"{'または'.join(rule['kinds'])} {rule['min']}件以上が必要（根拠つき本文 {count}件、章 {req['chapter']}）")
+        result.check(report.where(iid), errors)
+    for rid, req in report.requirements.items():
+        matching = [row for cid, row in report.claims.items() if cid in used and
+                    any(iid in row["req"] for iid, (parent, _) in report.items.items() if parent == rid)]
+        errors = [f"要求全体の期待件数が不足: {rule['kinds']} {rule['min']}件以上"
+                  for rule in req["expect"]
+                  if sum(row["kind"] in rule["kinds"] and not errors_by_claim[row["id"]] for row in matching) < rule["min"]]
+        result.check(report.where(rid), errors)
+    return result
+
+
+def argument(report, cid):
+    row = report.claims[cid]
+    return {"conclusion": {"id": cid, "kind": row["kind"], "text": row["text"]},
+            "premises": [{"id": pid, "kind": report.claims[pid]["kind"], "text": report.claims[pid]["text"]}
+                         for pid in sorted(row["premises"])]}
+
+
+def command_key(command, root):
+    try:
+        parts = shlex.split(command)
+    except ValueError as exc:
+        raise CannotCheck("判定コマンドの引用符が不正") from exc
+    if not parts:
+        raise CannotCheck("空の判定コマンド")
+    files = []
+    # Only the executable and its immediate script argument are inputs. Later arguments
+    # can name output files (e.g. a call counter); hashing those invalidates every run.
+    for part in parts[:2]:
+        path = Path(part) if Path(part).is_absolute() else root / part
+        if part == parts[0] and not path.is_file():
+            executable = shutil.which(part)
+            if executable:
+                path = Path(executable)
+        if path.is_file():
+            files.append(hashlib.sha256(path.read_bytes()).hexdigest())
+    return digest([command, files])
+
+
+def judge_one(command, payload, root):
+    try:
+        run = subprocess.run(shlex.split(command), input=json.dumps(payload, ensure_ascii=False),
+                             text=True, capture_output=True, cwd=root, timeout=120)
+        if run.returncode:
+            raise CannotCheck(f"判定コマンドが終了コード{run.returncode}")
+        answer = json.loads(run.stdout)
+        if not isinstance(answer, dict) or answer.get("verdict") not in VERDICTS or not isinstance(answer.get("reason"), str) or not answer["reason"].strip():
+            raise CannotCheck("判定JSONはverdictと空でないreasonが必要")
+        return {"verdict": answer["verdict"], "reason": answer["reason"]}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise CannotCheck(f"判定コマンドの出力を確認できない ({type(exc).__name__})") from exc
+
+
+def logic(report, judges):
+    result = Results()
+    graphs = {}
+    for cid, row in report.claims.items():
+        errors = []
+        try:
+            graphs[cid] = report.ancestors(cid)
+            if row["kind"] in {"事実", "実証結果"}:
+                errors.extend(claim_errors(report, row))
+            if row["kind"] == "提案" and not row["alternatives"]:
+                errors.append("比較した代替案がない")
+            for iid in row["req"]:
+                if iid not in report.items:
+                    errors.append(f"未知の細部項目: {iid}")
+                    continue
+                rid = report.items[iid][0]
+                for dep in report.requirements[rid]["depends_on"]:
+                    if dep not in report.requirements:
+                        errors.append(f"依存先の要求がない: {dep}")
+                    elif row["kind"] == "提案" and not any(
+                        report.claims[pid]["kind"] == "実証結果" and any(
+                            ref in report.items and report.items[ref][0] == dep for ref in report.claims[pid]["req"])
+                        for pid in graphs[cid] - {cid}
+                    ):
+                        errors.append(f"依存先{dep}の実証結果に到達しない")
+        except ValueError as exc:
+            errors.append(str(exc))
+        result.check("構造 " + report.where(cid), errors)
+    subjects = {}
+    for cid, row in report.claims.items():
+        if row["subject"]:
+            subjects.setdefault(row["subject"], []).append(cid)
+    for subject, ids in subjects.items():
+        values = [report.claims[cid] for cid in ids]
+        errors = []
+        if len({tuple(sorted(numbers(row["text"]))) for row in values}) > 1:
+            errors.append("同じ対象の数値が不一致")
+        proposals = [norm(row["text"]) for row in values if row["kind"] == "提案"]
+        if len(set(proposals)) > 1:
+            errors.append("同じ対象の推奨が不一致")
+        name = f"一貫性 {subject} ({', '.join(report.where(cid) for cid in ids)})"
+        if not errors and len({norm(row["text"]) for row in values}) > 1:
+            result.add("PENDING", name, "同じ対象の文が異なる。条件・言い回しの一貫性を人が確認する")
+        else:
+            result.check(name, errors)
+    cache_path = local(report.root, "reviews/logic.json")
+    cache = {}
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            if not isinstance(cache, dict):
+                raise ValueError()
+        except (ValueError, OSError) as exc:
+            raise CannotCheck("reviews/logic.jsonを読めない") from exc
+    accepted_path = local(report.root, "reviews/logic-accepted.toml")
+    accepted = indexed(read_toml(accepted_path), "accepted", "logic-accepted.toml") if accepted_path.exists() else {}
+    for cid, entry in accepted.items():
+        for key in ("hash", "reason", "approved_by"):
+            if not need(entry, key, str, cid).strip():
+                raise CannotCheck(f"{cid}: 承認の{key}が空")
+    keys = [command_key(command, report.root) for command in judges]
+    for cid, row in report.claims.items():
+        if row["kind"] not in {"解釈", "提案"} or cid not in graphs:
+            continue
+        payload = argument(report, cid)
+        key = digest(payload)
+        name = f"推論 {report.where(cid)} hash={key}"
+        if cid in accepted and accepted[cid]["hash"] == key:
+            entry = accepted[cid]
+            result.add("PASS", name, f"人の承認 {entry['approved_by']}: {entry['reason']}")
+            continue
+        if not judges:
+            result.add("PENDING", name, "判定コマンドが未指定。人の判断待ち")
+            continue
+        entry = cache.get(key, {})
+        if not isinstance(entry, dict) or entry.get("judges") != keys or entry.get("argument") != payload:
+            entry = {"id": cid, "argument": payload, "judges": keys,
+                     "answers": [judge_one(command, payload, report.root) for command in judges]}
+            cache[key] = entry
+        answers = entry.get("answers")
+        if not isinstance(answers, list) or len(answers) != len(judges) or any(
+            not isinstance(answer, dict) or answer.get("verdict") not in VERDICTS or not isinstance(answer.get("reason"), str)
+            for answer in answers
+        ):
+            raise CannotCheck("reviews/logic.jsonの判定形式が不正")
+        verdicts = [answer["verdict"] for answer in answers]
+        if "矛盾" in verdicts or verdicts == ["飛躍あり", "飛躍あり"]:
+            verdict = "FAIL"
+        elif all(v == "成立" for v in verdicts):
+            verdict = "PASS"
+        else:
+            verdict = "PENDING"
+        result.add(verdict, name, " / ".join(f"{a['verdict']}: {a['reason']}" for a in answers))
+    if judges:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
+def build(report, out):
+    checked = coverage(report)
+    if any(row[0] == "FAIL" for row in checked.rows):
+        return checked.finish()
+    notes = {}
+
+    def replace(match):
+        cid = match[1]
+        if cid not in notes:
+            sources = []
+            for pid in sorted(report.ancestors(cid)):
+                for ev in report.claims[pid]["evidence"]:
+                    if "source" in ev:
+                        source = report.sources[ev["source"]]
+                        label = f"{source['title']}、{source['publisher']}、{source['version']}、p.{ev['page']}、{source['url']}"
+                    else:
+                        label = f"実証成果物 {ev['path']}、値: {ev['value']}"
+                    if label not in sources:
+                        sources.append(label)
+            if not sources:
+                raise CannotCheck(f"{cid}: 脚注にできる根拠がない")
+            notes[cid] = (len(notes) + 1, "；".join(sources))
+        return f"[^{notes[cid][0]}]"
+
+    try:
+        body = "\n\n".join(MARK.sub(replace, text.strip()) for text in report.chapters.values())
+    except ValueError as exc:
+        raise CannotCheck(str(exc)) from exc
+    body += "\n\n" + "\n".join(f"[^{n}]: {text}" for n, text in notes.values()) + "\n"
+    if out.is_dir() or not out.suffix:
+        out = out / "report.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(body, encoding="utf-8")
+    print(f"PASS build: {out.name}（{len(notes)}脚注）\n=== 1 PASS, 0 FAIL, 0 PENDING ===")
+    return 0
+
+
+def toml_value(value):
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, datetime.date):
+        return json.dumps(str(value))
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{json.dumps(key)} = {toml_value(val)}" for key, val in value.items()) + " }"
+    return json.dumps(value)
+
+
+def mutate(report):
+    good = coverage(report)
+    if any(row[0] == "FAIL" for row in good.rows):
+        print("FAIL mutate: 元のcoverageが不合格。誤りを仕込む前に修正する")
+        return good.finish()
+    derived = next((row for row in report.claims.values() if row["kind"] in {"解釈", "提案"} and row["premises"]), None)
+    fact = next((row for row in report.claims.values() if row["kind"] == "事実" and row["evidence"]), None)
+    proposal = next((row for row in report.claims.values() if row["kind"] == "提案"), None)
+    numeric = next(((file, line) for file, text in report.chapters.items() for line in text.splitlines()
+                    if MARK.search(line) and numbers(MARK.sub("", line))), None)
+    shared = next(((a, b) for a in report.claims.values() for b in report.claims.values()
+                   if a["id"] != b["id"] and a["kind"] == b["kind"] == "提案"
+                   and a["subject"] and a["subject"] == b["subject"]
+                   and any(f"[{a['id']}]" in text and f"[{b['id']}]" not in text for text in report.chapters.values())), None)
+    if not all((derived, fact, proposal, numeric, shared)):
+        raise CannotCheck("mutateの題材が不足（前提・引用・数値・章をまたぐ同じ対象の提案が必要）")
+    stub = shlex.join([sys.executable, "-c", 'import json,sys; json.load(sys.stdin); print(json.dumps({"verdict":"成立","reason":"mutation stub"}))'])
+    with tempfile.TemporaryDirectory(prefix="report-baseline-") as temp:
+        root = Path(temp) / "report"
+        shutil.copytree(report.root, root, ignore=shutil.ignore_patterns("reviews", "build", ".git", ".tmp"))
+        base_logic = logic(Report(root), [stub, stub])
+    if any(row[0] != "PASS" for row in base_logic.rows):
+        print("FAIL mutate: 元のlogicが不合格")
+        return base_logic.finish(strict=True)
+    kinds = ("前提の主張を消す", "本文の数値を変える", "章の推奨を食い違わせる", "細部項目の記述を消す",
+             "引用を書き換える", "台帳にない文を足す", "事実に到達しない提案を作る")
+    result = Results()
+    for index, name in enumerate(kinds):
+        with tempfile.TemporaryDirectory(prefix="report-mutate-") as temp:
+            root = Path(temp) / "report"
+            shutil.copytree(report.root, root, ignore=shutil.ignore_patterns("reviews", "build", ".git", ".tmp"))
+            rows = copy.deepcopy(list(report.claims.values()))
+            if index == 0:
+                rows = [row for row in rows if row["id"] != derived["premises"][0]]
+            elif index == 1:
+                file, line = numeric
+                changed = re.sub(r"\d+(?:\.\d+)?", "987654321", MARK.sub("", line), count=1)
+                changed += " " + " ".join(f"[{cid}]" for cid in MARK.findall(line))
+                path = root / file
+                path.write_text(path.read_text(encoding="utf-8").replace(line, changed), encoding="utf-8")
+            elif index == 2:
+                row = next(row for row in rows if row["id"] == shared[1]["id"])
+                old = row["text"]
+                row["text"] = "別の方式を推奨する。"
+                for file in report.chapters:
+                    path = root / file
+                    path.write_text("\n".join(line.replace(old, row["text"]) if f"[{row['id']}]" in line else line
+                                               for line in path.read_text(encoding="utf-8").splitlines()) + "\n", encoding="utf-8")
+            elif index == 3:
+                iid = next(iter(report.items))
+                ids = {row["id"] for row in rows if iid in row["req"]}
+                for file in report.chapters:
+                    path = root / file
+                    path.write_text("\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                                               if not ids.intersection(MARK.findall(line))) + "\n", encoding="utf-8")
+            elif index == 4:
+                row = next(row for row in rows if row["id"] == fact["id"])
+                next(ev for ev in row["evidence"] if "source" in ev)["quote"] = "原文にない引用文字列。"
+            elif index == 5:
+                path = root / next(iter(report.chapters))
+                with path.open("a", encoding="utf-8") as stream:
+                    stream.write("\n根拠なしに新しい方針を追加する。\n")
+            else:
+                row = next(row for row in rows if row["id"] == proposal["id"])
+                row["premises"] = ["C-mutation-orphan"]
+                rows.append({**copy.deepcopy(derived), "id": "C-mutation-orphan", "kind": "解釈", "premises": [], "evidence": []})
+            # Use a standard TOML inline table writer only for disposable mutation copies.
+            (root / "claims.toml").write_text("claim = " + toml_value(rows) + "\n", encoding="utf-8")
+            mutated = Report(root)
+            checked = coverage(mutated) if index in {1, 3, 4, 5} else logic(mutated, [stub, stub])
+            caught = any(row[0] == "FAIL" for row in checked.rows)
+            result.add("PASS" if caught else "FAIL", name, f"{int(caught)}/1 caught/total")
+    return result.finish()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("coverage", "logic", "build", "mutate"):
+        command = sub.add_parser(name)
+        command.add_argument("--root", type=Path, required=True)
+        if name == "coverage":
+            command.add_argument("--check-urls", action="store_true")
+        if name == "logic":
+            command.add_argument("--judge", action="append", default=[])
+            command.add_argument("--strict", action="store_true")
+        if name == "build":
+            command.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        req = read_toml(args.root / "requirements.toml")
+        if not req.get("approved_by") or not req.get("approved_at"):
+            print("FAIL 細部項目が未承認")
+            return 1
+        if not isinstance(req["approved_by"], str) or not req["approved_by"].strip():
+            raise CannotCheck("approved_byは空でない文字列が必要")
+        try:
+            datetime.date.fromisoformat(str(req["approved_at"]))
+        except ValueError as exc:
+            raise CannotCheck("approved_atは日付が必要") from exc
+        report = Report(args.root)
+        if args.command == "coverage":
+            return coverage(report, args.check_urls).finish()
+        if args.command == "logic":
+            if len(args.judge) > 2:
+                raise CannotCheck("--judgeは2つまで")
+            return logic(report, args.judge).finish(args.strict)
+        if args.command == "build":
+            return build(report, args.out)
+        return mutate(report)
+    except (CannotCheck, OSError, UnicodeError) as exc:
+        print(f"PENDING 検査不能: {exc}\n=== 0 PASS, 0 FAIL, 1 PENDING ===")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
