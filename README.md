@@ -100,7 +100,7 @@ jq -s '.[0] * .[1]' ~/.claude/settings.json claude/settings.json > /tmp/settings
 | PreToolUse・PostToolUse（Bash） | `xlsx-guard.py` | コマンドが書き換えた.xlsxを検証する |
 | PreToolUse（Edit・Write） | `block-env-edit.sh` | `.env`の作成・編集を止める |
 | Stop | `stop-check.sh` | `make check`を実行し、落ちたら直させる（3回まで） |
-| Stop | `evidence-check.sh` | 振る舞いが変わる変更なのに証拠が古ければ止める（既定で見るのはSvelte・CSSなど。ほかの言語はリポジトリの`.claude/evidence-paths`で対象を指定する） |
+| Stop | `evidence-check.sh` | 振る舞いが変わる変更なのに証拠が古ければ止める（既定で見るのはSvelte・CSSなど。ほかの言語はリポジトリの`.claude/evidence-paths`で対象を指定する）。レベル1・2の作業では、証拠に異常系の行と「確かめていないこと」の節がなければ止める |
 | Stop | `check-reply-links.py` | 返信中のファイルリンクが開けるか確かめる |
 | Stop | `check-reply-language.py` | 返信が英語なら日本語で書き直させる |
 

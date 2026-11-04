@@ -14,6 +14,10 @@
 # It also records untriaged-change once per session and repository when behavior-changing
 # edits exist but the repository has no triage record in the last 24 hours. That record
 # never blocks.
+# When the newest evidence.md belongs to a task (its directory name) whose latest triage or
+# triage-override record says level 1 or 2, it also has to carry an abnormal-case row
+# ("異常系" at the start of a table row, or "異常系: 該当なし") and a "## 確かめていないこと"
+# section, unless it is only the "動作確認なし" line. Otherwise it does not count as evidence.
 # Known gap: changes inside a submodule are invisible from the parent repository.
 
 source "$(dirname "$0")/lib-log.sh"
@@ -125,15 +129,48 @@ if [ ! -f "$untriaged_file" ]; then
   touch "$untriaged_file"
 fi
 
+# mtime has one-second resolution, so every evidence.md tied for the newest one is checked.
 newest_evidence=0
+newest_files=()
 if [ -d "$root/.tmp/evidence" ]; then
   while IFS= read -r -d '' ev; do
     m=$(mtime "$ev")
-    [ -n "$m" ] && [ "$m" -gt "$newest_evidence" ] && newest_evidence=$m
+    [ -n "$m" ] || continue
+    if [ "$m" -gt "$newest_evidence" ]; then
+      newest_evidence=$m
+      newest_files=("$ev")
+    elif [ "$m" -eq "$newest_evidence" ]; then
+      newest_files+=("$ev")
+    fi
   done < <(find "$root/.tmp/evidence" -mindepth 2 -maxdepth 2 -name evidence.md -print0 2>/dev/null)
 fi
 
-[ "$newest_evidence" -gt 0 ] && [ "$newest_evidence" -ge "$newest_change" ] && allow_stop
+# Print what a level 1 or 2 evidence.md lacks, one item per line; print nothing when it is enough.
+content_gaps() {
+  local ev="$1" task level
+  task=$(basename "$(dirname "$ev")")
+  level=$(jq -Rr --arg task "$task" --arg root "$root" '
+    fromjson? // empty
+    | select(.kind == "triage" or .kind == "triage-override")
+    | select(.task == $task)
+    | select(.cwd == $root or (.cwd | startswith($root + "/")))
+    | (.detail | capture("level=(?<l>[^;[:space:]]+)").l) // empty' "$HARNESS_LOG" 2>/dev/null | tail -1)
+  case "$level" in 1 | 2) ;; *) return 0 ;; esac
+  if [ "$(grep -cv '^[[:space:]]*$' "$ev")" -le 1 ] && grep -Eq '^[[:space:]]*動作確認なし: ?[^[:space:]]' "$ev"; then
+    return 0
+  fi
+  # A table row whose first cell starts with 異常系, or a line (or first cell) that is 異常系: 該当なし: <reason>.
+  grep -Eq '^\|[[:space:]]*異常系|^([-*|][[:space:]]*)?異常系: ?該当なし: ?[^[:space:]]' "$ev" ||
+    echo "- ${ev}: 受け入れ条件と証拠の表に、異常系の行（当たる観点がなければ「異常系: 該当なし: <理由>」）"
+  grep -Eq '^## 確かめていないこと[[:space:]]*$' "$ev" ||
+    echo "- ${ev}: 「## 確かめていないこと」の節（なければ「なし」と書く）"
+}
+
+gaps=""
+if [ "$newest_evidence" -gt 0 ] && [ "$newest_evidence" -ge "$newest_change" ]; then
+  gaps=$(for ev in "${newest_files[@]}"; do content_gaps "$ev"; done)
+  [ -z "$gaps" ] && allow_stop
+fi
 
 # Key the give-up on the behavior files only, so writes elsewhere (.tmp/, docs) do not re-arm it.
 tree_hash=$(for f in "${changed[@]}"; do
@@ -152,9 +189,18 @@ if [ "$count" -gt "$MAX_BLOCKS" ]; then
   exit 0
 fi
 echo "$count" >"$counter_file"
-harness_log "evidence-missing" "block $count/$MAX_BLOCKS" "$root"
 
 files=$(printf '%s\n' "${changed[@]}" | head -10)
+if [ -n "$gaps" ]; then
+  harness_log "evidence-incomplete" "block $count/$MAX_BLOCKS" "$root"
+  reason="レベル1・2の作業の証拠に、次が足りません。
+${gaps}
+
+spec の確認範囲表で確かめないとした観点は「確かめていないこと」に写してください。形式は ~/.claude/references/evidence.md にあります。"
+  jq -cn --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+harness_log "evidence-missing" "block $count/$MAX_BLOCKS" "$root"
 reason="振る舞いに関わるファイルが変わっていますが、それより新しい動作確認の証拠がありません。
 変更したファイル（最大10件）:
 ${files}
