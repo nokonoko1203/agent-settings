@@ -73,6 +73,7 @@
 ./claude/skills/sanitize-artifacts/SKILL.md
 ./claude/skills/sanitize-artifacts/agents/openai.yaml
 ./claude/skills/spec/SKILL.md
+./claude/skills/spec/references/failure-modes.md
 ./claude/skills/spec/references/refactor-plan-template.md
 ./claude/skills/spike-rebuild/SKILL.md
 ./claude/skills/why/NOTICE.md
