@@ -1,27 +1,22 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * List the e2e coverage targets of a SvelteKit app, and pick the e2e cases a change touches.
  *
- *   bun .claude/bin/e2e-inventory-sveltekit.ts write  [--out e2e/ledger/inventory.json]
- *   bun .claude/bin/e2e-inventory-sveltekit.ts check  [--out e2e/ledger/inventory.json]
- *   bun .claude/bin/e2e-inventory-sveltekit.ts select --base <ref> [--ledger e2e/ledger] [--tests e2e]
+ *   node .claude/bin/e2e-inventory-sveltekit.ts write  [--out e2e/ledger/inventory.json]
+ *   node .claude/bin/e2e-inventory-sveltekit.ts check  [--out e2e/ledger/inventory.json]
+ *   node .claude/bin/e2e-inventory-sveltekit.ts select --base <ref> [--ledger e2e/ledger] [--tests e2e]
  *
  * Run it from the repository root. It reads src/ with the project's own `svelte/compiler`
  * and `typescript`. What it extracts, and how the ledger uses it, is defined in
  * .claude/references/verification-map.md. Exit codes: 0 ok, 1 inventory out of date, 2 could not run.
  */
+import { spawnSync } from 'node:child_process';
+import { globSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { parse } from 'svelte/compiler';
 import * as ts from 'typescript';
 
-// Module-scoped declarations of the Bun APIs used here, so the project needs no @types/bun.
-declare const Bun: {
-	argv: string[];
-	file(path: string): { text(): Promise<string> };
-	write(path: string, data: string): Promise<number>;
-	spawnSync(cmd: string[], options: { stdout: 'pipe'; stderr: 'pipe' }): { exitCode: number; stdout: Uint8Array; stderr: Uint8Array };
-	Glob: new (pattern: string) => { scanSync(options: { cwd: string }): Iterable<string> };
-};
-declare const process: { exitCode: number | undefined };
+/** Files only, like Bun.Glob's default: a route directory such as `worker.js/` must not be read. */
+const globFiles = (pattern: string) => globSync(pattern).filter((f) => statSync(f).isFile());
 
 type Kind = 'route' | 'api' | 'action' | 'ui' | 'call' | 'link' | 'unresolved';
 type Item = { key: string; kind: Kind; source: string; line: number; reason?: string };
@@ -378,11 +373,11 @@ function extractModule(c: Collector, file: string, text: string) {
 
 async function collect(): Promise<Collector> {
 	const c = new Collector();
-	const files = [...new Bun.Glob('src/**/*.{svelte,ts,js}').scanSync({ cwd: '.' })].sort();
+	const files = globFiles('src/**/*.{svelte,ts,js}').sort();
 	if (!files.some((f) => f.startsWith('src/routes/'))) throw new CannotRun('src/routes が見つからない（リポジトリのルートで実行する）');
 	for (const file of files) {
 		if (TEST_FILE.test(file)) continue;
-		const text = await Bun.file(file).text();
+		const text = readFileSync(file, 'utf8');
 		if (file.endsWith('.svelte')) {
 			extractSvelte(c, file, text);
 			if (file.startsWith('src/routes/') && PAGE_FILE.test(basename(file))) {
@@ -407,7 +402,7 @@ function inventoryJson(items: Item[]): string {
 async function readJson(path: string): Promise<unknown> {
 	let text: string;
 	try {
-		text = await Bun.file(path).text();
+		text = readFileSync(path, 'utf8');
 	} catch {
 		throw new CannotRun(`${path} を読めない`);
 	}
@@ -424,7 +419,8 @@ async function writeOrCheck(command: 'write' | 'check', out: string): Promise<nu
 	const unresolved = c.items.filter((i) => i.kind === 'unresolved');
 	for (const u of unresolved) console.error(`抽出できない: ${u.source}:${u.line} ${u.key}（${u.reason}）`);
 	if (command === 'write') {
-		await Bun.write(out, json);
+		if (dirname(out)) mkdirSync(dirname(out), { recursive: true });
+		writeFileSync(out, json);
 		console.log(`${out}: ${JSON.parse(json).items.length}件`);
 		return 0;
 	}
@@ -433,7 +429,7 @@ async function writeOrCheck(command: 'write' | 'check', out: string): Promise<nu
 	const after = new Map(c.items.map((i) => [i.key, i]));
 	const added = [...after.keys()].filter((k) => !before.has(k)).sort();
 	const removed = [...before].filter((k) => !after.has(k)).sort();
-	if (json === (await Bun.file(out).text())) {
+	if (json === readFileSync(out, 'utf8')) {
 		console.log(`${out}: ソースと一致（${before.size}件）`);
 		return 0;
 	}
@@ -472,9 +468,10 @@ function resolveImport(from: string, spec: string, files: Set<string>, aliases: 
 }
 
 function git(args: string[]): string[] {
-	const r = Bun.spawnSync(['git', ...args], { stdout: 'pipe', stderr: 'pipe' });
-	if (r.exitCode !== 0) throw new CannotRun(`git ${args.join(' ')}: ${new TextDecoder().decode(r.stderr).trim()}`);
-	return new TextDecoder().decode(r.stdout).split('\n').filter(Boolean);
+	// The default 1 MiB would cut off a long file list.
+	const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+	if (r.error || r.status !== 0) throw new CannotRun(`git ${args.join(' ')}: ${r.error ? r.error.message : r.stderr.trim()}`);
+	return r.stdout.split('\n').filter(Boolean);
 }
 
 async function select(base: string, ledger: string, testsDir: string): Promise<number> {
@@ -499,8 +496,8 @@ async function select(base: string, ledger: string, testsDir: string): Promise<n
 	const data = (await readJson(`${ledger}/scenarios.json`)) as { scenarios?: { id: string; status: string; covers: string[] }[] };
 	const scenarios = data.scenarios ?? [];
 	const testCases = new Map<string, string[]>();
-	for (const f of new Bun.Glob(`${testsDir}/**/*.{ts,js}`).scanSync({ cwd: '.' })) {
-		testCases.set(f, [...(await Bun.file(f).text()).matchAll(/@case:([a-z][a-z0-9-]*)/g)].map((m) => m[1]));
+	for (const f of globFiles(`${testsDir}/**/*.{ts,js}`)) {
+		testCases.set(f, [...readFileSync(f, 'utf8').matchAll(/@case:([a-z][a-z0-9-]*)/g)].map((m) => m[1]));
 	}
 
 	const picked = new Set<string>();
@@ -543,7 +540,7 @@ function option(args: string[], name: string, fallback?: string): string {
 }
 
 async function main(): Promise<number> {
-	const [command, ...args] = Bun.argv.slice(2);
+	const [command, ...args] = process.argv.slice(2);
 	try {
 		if (command === 'write' || command === 'check') return await writeOrCheck(command, option(args, '--out', 'e2e/ledger/inventory.json'));
 		if (command === 'select') return await select(option(args, '--base'), option(args, '--ledger', 'e2e/ledger'), option(args, '--tests', 'e2e'));
