@@ -33,7 +33,8 @@ const FORM_BINDINGS = ['value', 'checked', 'group', 'files'];
 const PAGE_FILE = /^\+page(@.*)?\.svelte$/;
 const SERVER_FILE = /^\+server\.(ts|js)$/;
 const PAGE_SERVER_FILE = /^\+page\.server\.(ts|js)$/;
-const TEST_FILE = /\.(test|spec)\.(ts|js)$|\.d\.ts$/;
+// Test code and its helpers under a tests/ folder are not part of the app.
+const TEST_FILE = /\.(test|spec)\.(ts|js)$|\.d\.ts$|(^|\/)tests\//;
 
 class CannotRun extends Error {}
 
