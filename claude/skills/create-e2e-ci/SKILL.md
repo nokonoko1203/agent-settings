@@ -32,8 +32,9 @@ PRを開くと、CIでモックとアプリを起動し、利用者と同じ操�
 ## 3. 作る
 
 - **テスト**: 検証スキルの操作手段に合わせ、ARIAのロールやラベル、data属性など安定したセレクタを使う。内部のsetterやテスト専用のエンドポイントではなく、利用者と同じ経路を通す。Playwrightの`webServer`で、モックとアプリの起動と準備完了の判定を書く。各テストにケースIDのタグを1つ付ける（`{ tag: '@case:<id>' }`）
-- **対応表**: 抽出器がある構成（今はSvelteKit）では、`.claude/bin/e2e-inventory-sveltekit.ts write`で`e2e/ledger/inventory.json`を作り、`e2e/ledger/scenarios.json`に、抽出した対象ごとに受け持つケースか理由付きの例外を書く。受け持つケースのない対象には、ケースを足す。足せない理由があれば例外か`pending`にする。`tsconfig.json`の`include`に`.claude/bin/*.ts`を足す。`.claude/bin/`に抽出器と`verify-map`がなければ、`~/.claude/references/verification-map.md`の「つなぎ方」に従って入れる。書き方は`~/.claude/references/verification-map.md`に従う
-- **機能一覧**: ケースのIDを、確かめるサブ機能の札に書く（`［e2e: <id>］`）。ケースがサブ機能の一部だけを確かめるなら範囲付きの札にし、残りの範囲に`手動`か`未確認`の札を付ける。書き方は`~/.claude/references/verification-map.md`に従う
+- **対応表**: 抽出器がある構成（今はSvelteKitとHono）では、`.claude/bin/e2e-inventory-sveltekit.ts write`か`.claude/bin/e2e-inventory-hono.ts write --app <file>`で`e2e/ledger/inventory.json`を作り、`e2e/ledger/scenarios.json`に、抽出した対象ごとに受け持つケースか理由付きの例外を書く。受け持つケースのない対象には、ケースを足す。足せない理由があれば例外か`pending`にする。`tsconfig.json`の`include`に`.claude/bin/*.ts`を足す。`.claude/bin/`に抽出器と`verify-map`がなければ、`~/.claude/references/verification-map.md`の「つなぎ方」に従って入れる。書き方は`~/.claude/references/verification-map.md`に従う
+- **APIのテスト**: 画面から呼ばれないAPIなど、e2eで受け持てない`api`・`action`の対象があれば、計画のケースの候補に、APIのケース（`runner: "api"`。DB・外部APIをモックしたVitestのテスト。書き方は`write-api-case`）を挙げてよい。画面の経路を確かめるケースは、APIのケースで代用しない。Vitestの設定は`strictTags: false`にする
+- **機能一覧**: ケースのIDを、確かめるサブ機能の札に書く（`［e2e: <id>］`、APIのケースは`［api: <id>］`）。ケースがサブ機能の一部だけを確かめるなら範囲付きの札にし、残りの範囲に`手動`か`未確認`の札を付ける。書き方は`~/.claude/references/verification-map.md`に従う
 - **ワークフロー**: [`references/workflows.md`](references/workflows.md)に従う
 - **資格情報**: 本物の資格情報を使わない。モックの資格情報はダミーの値にし、ワークフローに直接書いてよい。モックで確かめたことを、実際の認証や外部サービスとの接続の証拠にしない。接続を変える作業では、モックでは確かめられない範囲を別に挙げる
 - **README**: e2eの節を足す（手元での動かし方、ケースの足し方）
@@ -53,6 +54,6 @@ PRを開くと、CIでモックとアプリを起動し、利用者と同じ操�
 
 ## 5. 伝える
 
-日々の変更では、`playbook`の手順書に沿って、変更した機能の一覧と対応表とe2eを一緒に直し、足りないケースはAIが`/write-e2e-case`で書いて対応表に載せ、e2eを動かすと伝える。落ちたケースの直し方も同じスキルにある。プレビューも要るなら`/create-preview-env`を案内する。
+日々の変更では、`playbook`の手順書に沿って、変更した機能の一覧と対応表とe2eを一緒に直し、足りないケースはAIが`/write-e2e-case`（画面）か`/write-api-case`（API）で書いて対応表に載せ、e2eを動かすと伝える。落ちたケースの直し方も同じスキルにある。プレビューも要るなら`/create-preview-env`を案内する。
 
 生成したファイルのコミットは、ユーザーの依頼か承認を経て、CLAUDE.mdのGitの規則に従って行う。

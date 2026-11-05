@@ -2,15 +2,18 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Check a verification skill's feature map against the e2e ledger, the tests and e2e results.
+"""Check a verification skill's feature map against the case ledger, the tests and their results.
 
 Usage: verify-map check --skill DIR [--ledger DIR] [--tests DIR] [--results FILE]
+                        [--api-tests DIR] [--api-results FILE] [--cases IDS]
 
   --skill    the verification skill, e.g. .claude/skills/verify-<app> (reads features/)
   --ledger   e2e ledger directory (inventory.json from an extractor, scenarios.json by hand);
              every extracted target must be covered by a scenario or an exception
   --tests    e2e test directory; finds the @case:<id> tags written in the test files
   --results  Playwright JSON report of the run to check; compares e2e case IDs and outcomes
+  --api-tests    directory holding the API tests (*.test.ts, *.test.js); finds their @case:<id> tags
+  --api-results  Vitest JSON report of the API test run; compares API case IDs and outcomes
 
 The notation is defined in .claude/references/verification-map.md. Standard library only,
 so CI can run it with plain `python3`.
@@ -30,6 +33,7 @@ H2_SETS = [
 ]
 KINDS = {
     "e2e": "e2e",
+    "api": "api",
     "手動": "manual",
     "manual": "manual",
     "対象外": "excluded",
@@ -42,6 +46,11 @@ SUBFEATURE = re.compile(rf"^- `({ID})`:? (.*)$")
 TAG = re.compile(r"［([^()\r\n［］:]+)(?:\(([^()\r\n［］]+)\))?: ([^\r\n［］]+)］")
 CASE_TAG = re.compile(rf"^@?case:({ID})$")
 LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+# A case is run by Playwright through the screen (e2e) or by Vitest against the API handlers (api).
+RUNNERS = ("e2e", "api")
+RUNNER_NAMES = {"e2e": "e2e", "api": "APIのテスト"}
+# Targets an API case may cover: the handlers it calls. Screen targets need the screen.
+API_TARGET_KINDS = ("api", "action")
 
 
 class CannotCheck(Exception):
@@ -128,7 +137,7 @@ def parse_feature(path: Path, report: Report) -> list[SubFeature]:
         for tm in TAG.finditer(rest):
             label, scope, content = tm.group(1).strip(), tm.group(2), tm.group(3).strip()
             if label not in KINDS:
-                report.error(where, f"札の種類「{label}」は使えない（e2e、手動、対象外、未確認）")
+                report.error(where, f"札の種類「{label}」は使えない（e2e、api、手動、対象外、未確認）")
                 continue
             checks.append(Check(KINDS[label], scope.strip() if scope else None, content))
         if "［" in TAG.sub("", rest) or "］" in TAG.sub("", rest):
@@ -156,24 +165,25 @@ def validate_checks(sub_id: str, checks: list[Check], where: str, report: Report
     for s in sorted({s for s in scopes if scopes.count(s) > 1}):
         report.error(where, f"{sub_id}: 範囲「{s}」に札が重なっている")
     for c in checks:
-        if c.kind == "e2e":
+        if c.kind in RUNNERS:
             for case in (x.strip() for x in c.content.split(",")):
                 if not re.fullmatch(ID, case):
                     report.error(where, f"{sub_id}: ケースID「{case}」の形が正しくない")
 
 
-def case_refs(subs: list[SubFeature]) -> dict[str, list[str]]:
-    refs: dict[str, list[str]] = {}
+def case_refs(subs: list[SubFeature]) -> dict[str, list[tuple[str, str]]]:
+    """Case ID -> [(where, runner)] for every ［e2e］ and ［api］ tag."""
+    refs: dict[str, list[tuple[str, str]]] = {}
     for s in subs:
         for c in s.checks:
-            if c.kind == "e2e":
+            if c.kind in RUNNERS:
                 for case in (x.strip() for x in c.content.split(",")):
-                    refs.setdefault(case, []).append(f"{s.file}:{s.line}")
+                    refs.setdefault(case, []).append((f"{s.file}:{s.line}", c.kind))
     return refs
 
 
 TARGET_KINDS = ("route", "api", "action", "ui", "call", "link", "unresolved")
-ASPECTS = {"normal", "persist", "invalid-input", "error", "empty"}
+ASPECTS = {"normal", "persist", "invalid-input", "error", "empty", "auth"}
 EXCEPTION_KINDS = {"manual", "unit", "out-of-scope"}
 WRITE_METHODS = ("POST ", "PUT ", "PATCH ", "DELETE ")
 
@@ -181,6 +191,7 @@ WRITE_METHODS = ("POST ", "PUT ", "PATCH ", "DELETE ")
 @dataclass
 class Ledger:
     implemented: dict[str, str] = field(default_factory=dict)  # case id -> where
+    runner: dict[str, str] = field(default_factory=dict)  # case id -> e2e | api (implemented and pending)
     pending: list[tuple[str, str]] = field(default_factory=list)  # (id, reason)
     exceptions: list[tuple[str, str, str]] = field(default_factory=list)  # (key, kind, reason)
 
@@ -230,6 +241,12 @@ def check_ledger(ledger: Path, feature_names: set[str], report: Report) -> Ledge
         ids.add(sid)
         if not nonempty(s.get("title")):
             report.error(where, "title がない")
+        # Ledgers written before API cases have no runner: those cases are e2e.
+        runner = s.get("runner", "e2e")
+        if runner not in RUNNERS:
+            report.error(where, f"runner は {' か '.join(RUNNERS)} にする")
+            runner = "e2e"
+        result.runner[sid] = runner
         status = s.get("status")
         if status == "implemented":
             result.implemented[sid] = where
@@ -251,6 +268,8 @@ def check_ledger(ledger: Path, feature_names: set[str], report: Report) -> Ledge
                 report.error(where, f"covers の「{key}」が抽出結果にない（対象が消えたか名前が変わった）")
             elif targets[key]["kind"] == "unresolved":
                 report.error(where, f"抽出できない「{key}」はケースで受け持てない（抽出できる形に直すか、理由付きの例外にする）")
+            elif runner == "api" and targets[key]["kind"] not in API_TARGET_KINDS:
+                report.error(where, f"APIのケースは画面の対象「{key}」を受け持てない（{'・'.join(API_TARGET_KINDS)}だけ）")
             covered.setdefault(key, []).append(s)
     excepted: set[str] = set()
     for i, e in enumerate(exceptions):
@@ -405,11 +424,17 @@ def strip_comments(source: str) -> str:
     return "".join(out)
 
 
-def scan_tests(tests: Path) -> dict[str, list[str]]:
+API_TEST_FILE = re.compile(r"\.test\.(ts|js|mjs)$")
+
+
+def scan_tests(tests: Path, runner: str) -> dict[str, list[str]]:
+    """Case ID -> [file:line] of the @case:<id> tags. API tests are only *.test.* files outside node_modules."""
     if not tests.is_dir():
         raise CannotCheck(f"テストのディレクトリ {tests} がない")
     found: dict[str, list[str]] = {}
     for f in sorted(tests.rglob("*")):
+        if runner == "api" and (not API_TEST_FILE.search(f.name) or "node_modules" in f.relative_to(tests).parts):
+            continue
         if f.suffix in (".ts", ".js", ".mjs") and f.is_file():
             for n, line in enumerate(strip_comments(read_text(f)).splitlines(), 1):
                 # Only tags written as string literals outside comments count as a test.
@@ -438,7 +463,7 @@ def outcome(test: dict) -> str:
     return "成功" if test.get("status") == "expected" else "失敗"
 
 
-def check_results(results: Path, refs: dict[str, list[str]], known: set[str], where_known: str, report: Report) -> set[str]:
+def check_results(results: Path, refs: dict[str, list[str]], known: set[str], where_known: str, report: Report, other: set[str] = frozenset()) -> set[str]:
     try:
         data = json.loads(read_text(results))
         suites = data["suites"]
@@ -467,7 +492,9 @@ def check_results(results: Path, refs: dict[str, list[str]], known: set[str], wh
                     continue
                 seen[(case, project)] = (spec_key, where)
                 outcomes.setdefault(case, []).append((project, outcome(test)))
-            if case not in known:
+            if case in other:
+                report.error(where, f"APIのテストのケース {case} がe2eの結果にある")
+            elif case not in known:
                 report.error(where, f"ケース {case} は{where_known}にない")
     for case, wheres in sorted(refs.items()):
         results_for = outcomes.get(case) or [("", "未実行")]
@@ -476,6 +503,61 @@ def check_results(results: Path, refs: dict[str, list[str]], known: set[str], wh
             report.notes.append(f"  {result}  {label}")
             if result != "成功":
                 report.error(wheres[0], f"ケース {label} が{result}")
+    return set(outcomes)
+
+
+VITEST_OUTCOMES = {"passed": "成功", "failed": "失敗", "skipped": "スキップ", "pending": "スキップ", "todo": "スキップ", "disabled": "スキップ"}
+
+
+def check_api_results(results: Path, refs: dict[str, list[str]], known: set[str], where_known: str, report: Report, other: set[str] = frozenset()) -> set[str]:
+    """Compare a Vitest JSON report with the API cases. Tests without a @case tag (unit tests) are ignored."""
+    try:
+        data = json.loads(read_text(results))
+        files = data["testResults"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise CannotCheck(f"{results} をVitestのJSONとして読めない: {e}") from e
+    if not isinstance(files, list) or not all(isinstance(x, dict) for x in files):
+        raise CannotCheck(f"{results} の testResults が配列ではない")
+    seen: dict[str, tuple[str, str]] = {}  # case -> (test key, where)
+    outcomes: dict[str, list[str]] = {}
+    for f in files:
+        name = f.get("name", "")
+        tests = f.get("assertionResults")
+        if not isinstance(tests, list):
+            raise CannotCheck(f"{results} の {name} に assertionResults がない")
+        if f.get("status") == "failed" and not any(isinstance(t, dict) and t.get("status") == "failed" for t in tests):
+            # The file failed outside its tests (import error, beforeAll/afterAll): no test carries the failure.
+            report.error(name, f"テストのファイルが失敗した: {str(f.get('message', ''))[:200]}")
+        for t in tests:
+            loc = t.get("location") or {}
+            where = f"{name}:{loc['line']}" if "line" in loc else f"{name} 「{t.get('title')}」"
+            # test.each makes several tests on one line; the full name tells them apart.
+            test_key = f"{name} {t.get('fullName') or t.get('title')}"
+            ids = [m.group(1) for tag in t.get("tags") or [] if isinstance(tag, str) and (m := CASE_TAG.match(tag))]
+            if not ids:
+                continue
+            if len(ids) > 1:
+                report.error(where, f"テスト「{t.get('title')}」にケースIDのタグが複数ある: {ids}")
+                continue
+            case, status = ids[0], t.get("status")
+            if status not in VITEST_OUTCOMES:
+                raise CannotCheck(f"{where} のテストの状態を読めない: {status}")
+            if case in seen and seen[case][0] != test_key:
+                report.error(where, f"ケース {case} が {seen[case][1]} のテストと重複している")
+                continue
+            seen[case] = (test_key, where)
+            outcomes.setdefault(case, []).append(VITEST_OUTCOMES[status])
+            if case in other:
+                report.error(where, f"e2eのケース {case} がAPIのテストの結果にある")
+            elif case not in known:
+                report.error(where, f"ケース {case} は{where_known}にない")
+    for case, wheres in sorted(refs.items()):
+        got = outcomes.get(case) or ["未実行"]
+        # --repeats can report one test several times; any non-success counts.
+        result = next((r for r in got if r != "成功"), "成功")
+        report.notes.append(f"  {result}  {case}")
+        if result != "成功":
+            report.error(wheres[0], f"ケース {case} が{result}")
     return set(outcomes)
 
 
@@ -488,6 +570,8 @@ def main() -> int:
     check.add_argument("--tests", type=Path)
     check.add_argument("--results", type=Path)
     check.add_argument("--cases", help="comma-separated case IDs that were run (after select); others need no result")
+    check.add_argument("--api-tests", type=Path)
+    check.add_argument("--api-results", type=Path)
     args = parser.parse_args()
 
     report = Report()
@@ -501,48 +585,83 @@ def main() -> int:
             if ids.count(s.id) > 1:
                 report.error(f"{s.file}:{s.line}", f"サブ機能ID {s.id} が重複している")
         tags = case_refs(subs)
+        for case, uses in sorted(tags.items()):
+            if len({r for _, r in uses}) > 1:
+                report.error(uses[0][0], f"ケース {case} の札が e2e と api の両方にある")
+        # refs[runner]: implemented case -> where it is required from; known[runner]: every case ID of that runner.
+        refs: dict[str, dict[str, list[str]]] = {r: {} for r in RUNNERS}
+        known: dict[str, set[str]] = {r: set() for r in RUNNERS}
         if args.ledger:
             ledger = check_ledger(args.ledger, {f.name for f in files}, report)
-            # The feature map tags and the ledger name the same implemented cases.
-            for case, wheres in sorted(tags.items()):
+            # The feature map tags and the ledger name the same implemented cases, with the same runner.
+            for case, uses in sorted(tags.items()):
+                where, kind = uses[0]
                 if case not in ledger.implemented:
                     state = "未実装（pending）" if case in dict(ledger.pending) else "対応表にない"
-                    report.error(wheres[0], f"札のケース {case} が{state}")
+                    report.error(where, f"札のケース {case} が{state}")
+                elif ledger.runner[case] != kind:
+                    report.error(where, f"札のケース {case} は［{kind}］だが、対応表の runner は {ledger.runner[case]}")
             for case, where in sorted(ledger.implemented.items()):
                 if case not in tags:
                     report.error(where, f"ケース {case} を機能一覧の札から参照していない")
-            refs = {c: [w] for c, w in ledger.implemented.items()}
-            known, where_known = set(ledger.implemented) | {c for c, _ in ledger.pending}, "対応表"
+                refs[ledger.runner[case]][case] = [where]
+            for case, runner in ledger.runner.items():
+                known[runner].add(case)
+            where_known = "対応表"
         else:
             report.notes.append("対応表: 照合なし（--ledgerなし）")
-            refs, known, where_known = tags, set(tags), "機能一覧の札"
+            for case, uses in tags.items():
+                refs[uses[0][1]][case] = [w for w, _ in uses]
+                known[uses[0][1]].add(case)
+            where_known = "機能一覧の札"
         have_tests: set[str] = set()
-        if args.tests:
-            found = scan_tests(args.tests)
+        found_by: dict[str, dict[str, list[str]]] = {}
+        for runner, tests in (("e2e", args.tests), ("api", args.api_tests)):
+            if not tests:
+                continue
+            found = found_by[runner] = scan_tests(tests, runner)
             have_tests |= set(found)
+            other = next(r for r in RUNNERS if r != runner)
             for case, wheres in sorted(found.items()):
-                if case not in known:
+                if case in known[other]:
+                    report.error(wheres[0], f"{RUNNER_NAMES[other]}のケース {case} のタグが{RUNNER_NAMES[runner]}（{tests}）にある")
+                elif case not in known[runner]:
                     report.error(wheres[0], f"ケース {case} は{where_known}にない")
                 if len(wheres) > 1:
                     report.error(wheres[1], f"ケース {case} のタグが複数のテストにある: {', '.join(wheres)}")
-            for case, where in sorted(refs.items()):
+            for case, where in sorted(refs[runner].items()):
                 if case not in found:
-                    report.error(where[0], f"ケース {case} のテスト（@case:{case}）が {args.tests} にない")
+                    report.error(where[0], f"ケース {case} のテスト（@case:{case}）が {tests} にない")
+        if "e2e" in found_by and "api" in found_by:
+            for case in sorted(set(found_by["e2e"]) & set(found_by["api"])):
+                report.error(found_by["api"][case][0], f"ケース {case} のタグが e2e と APIのテストの両方にある")
+        required = refs
+        # --cases narrows the result check only; without results it is ignored, as before API cases.
+        if args.cases and (args.results or args.api_results):
+            picked = {c.strip() for c in args.cases.split(",") if c.strip()}
+            for c in sorted(picked - refs["e2e"].keys() - refs["api"].keys()):
+                report.error("--cases", f"ケース {c} は実装済みのケースではない")
+            required = {r: {c: w for c, w in refs[r].items() if c in picked} for r in RUNNERS}
         if args.results:
             report.notes.append("e2eの結果:")
-            required = refs
             if args.cases:
-                picked = {c.strip() for c in args.cases.split(",") if c.strip()}
-                for c in sorted(picked - refs.keys()):
-                    report.error("--cases", f"ケース {c} は実装済みのケースではない")
-                required = {c: w for c, w in refs.items() if c in picked}
-                report.notes.append(f"  （--cases の{len(required)}件だけを照合。残りの{len(refs) - len(required)}件は動かしていない）")
+                report.notes.append(f"  （--cases の{len(required['e2e'])}件だけを照合。残りの{len(refs['e2e']) - len(required['e2e'])}件は動かしていない）")
             try:
-                have_tests |= check_results(args.results, required, known, where_known, report)
+                have_tests |= check_results(args.results, required["e2e"], known["e2e"], where_known, report, known["api"])
             except (AttributeError, TypeError, KeyError) as e:
                 raise CannotCheck(f"{args.results} の形を解釈できない: {e!r}") from e
         else:
             report.notes.append("e2eの結果: 照合なし（--resultsなし。e2eの成否は分からない）")
+        if args.api_results:
+            report.notes.append("APIのテストの結果:")
+            if args.cases:
+                report.notes.append(f"  （--cases の{len(required['api'])}件だけを照合。残りの{len(refs['api']) - len(required['api'])}件は動かしていない）")
+            try:
+                have_tests |= check_api_results(args.api_results, required["api"], known["api"], where_known, report, known["e2e"])
+            except (AttributeError, TypeError, KeyError) as e:
+                raise CannotCheck(f"{args.api_results} の形を解釈できない: {e!r}") from e
+        elif refs["api"] or args.api_tests:
+            report.notes.append("APIのテストの結果: 照合なし（--api-resultsなし。APIのテストの成否は分からない）")
         if ledger:
             for case, _ in ledger.pending:
                 if case in have_tests:
@@ -563,7 +682,7 @@ def main() -> int:
         for key, kind, reason in ledger.exceptions:
             print(f"  {names.get(kind, kind)}  {key}: {reason}")
     if unchecked:
-        print("e2eで確かめない範囲（この検査の成功は、これらの確認を意味しない）:")
+        print("e2eとAPIのテストで確かめない範囲（この検査の成功は、これらの確認を意味しない）:" if refs["api"] else "e2eで確かめない範囲（この検査の成功は、これらの確認を意味しない）:")
         names = {"manual": "手動", "excluded": "対象外", "unverified": "未確認"}
         for s, c in unchecked:
             scope = f"({c.scope})" if c.scope else ""

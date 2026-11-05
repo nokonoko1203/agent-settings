@@ -9,7 +9,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 1. 作業の前に重さ（E/0/1/2/R）を決めて`harness-log triage`で記録する。マイグレーション・認可・公開API・データ削除・課金・本番反映はレベル2以上。
 2. 調査は`imozuru`・`research`、既存コードの理解は`how`・`why`。
 3. 動かさないと分からない実装は`spike-rebuild`で、試作して捨ててから作り直す。
-4. 設計は`spec`で、受け入れ条件に`[e2e]`・`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
+4. 設計は`spec`で、受け入れ条件に`[e2e]`・`[api]`・`[test]`・`[check]`・`[human]`の印を付ける。レベル1・2は`playbook`の手順書に沿う。
 5. 実装は、Claude Codeから`codex`スキルでCodex（Sol）に頼める（「solで実装して」のように頼んだときだけ使われる）。運用してみた実感として、Solはトークン消費が軽く、丁寧な指示によく従う。そこで、手間のかかる指示書（ゴール・完了条件・範囲・背景・出力・止まる条件）はClaude Code（Opus）に書かせる。Solの報告は証拠ではないので、差分とテスト結果はClaude Codeが自分で確かめる。
 6. 実装中はhookが危険な操作を止め、終わる前に`make check`と証拠（`.tmp/evidence/<task>/evidence.md`）を確かめる。
 7. コード変更後は`code-reviewer`スキルでレビューし、PRを作る。Claude Codeでは、Codex（Sol）にも別にレビューさせ、指摘をコードで確かめて統合する。マージは人が行う。
@@ -26,7 +26,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 ├── claude/                 # ~/.claude/ に展開する
 │   ├── CLAUDE.md
 │   ├── settings.json       # hook・権限・環境変数
-│   ├── bin/                # harness-log, harness-report, harness-install, verify-map, e2e-inventory-sveltekit.ts
+│   ├── bin/                # harness-log, harness-report, harness-install, verify-map, e2e-inventory-sveltekit.ts, e2e-inventory-hono.ts
 │   ├── hooks/
 │   ├── references/         # evidence.mdの形式、機能一覧の確認手段の書き方など
 │   ├── rules/
@@ -47,7 +47,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 |---|---|
 | `uv` | `harness-report`・`harness-install`の実行 |
 | `python3` | Python製hookと`verify-map`の実行 |
-| Node.js 24 | `e2e-inventory-sveltekit.ts`（SvelteKitのe2eの確認対象の抽出）の実行。TypeScriptを型の除去でそのまま動かす。対象のプロジェクトの`svelte`と`typescript`を使う |
+| Node.js 24 | `e2e-inventory-sveltekit.ts`（SvelteKitの確認対象の抽出）と`e2e-inventory-hono.ts`（HonoのAPIの抽出）の実行。TypeScriptを型の除去でそのまま動かす。対象のプロジェクトの`svelte`と`typescript`、または`hono`を使う |
 | `jq` | hookでのJSON処理 |
 | `make` | `stop-check.sh`が`make check`を実行する |
 | `shasum` | `stop-check.sh`・`evidence-check.sh`の状態管理（Linuxでは`perl`の`shasum`が必要な場合がある） |
@@ -126,6 +126,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 保守運用 | `maintain-verification-skill` | 検証スキルと機能一覧を、アプリの現状に合わせて点検する |
 | 保守運用 | `create-e2e-ci` | 外部との境界をモックに向けたe2eテストと、監査・型検査・テスト・e2eを動かすCIを作る |
 | 保守運用 | `write-e2e-case` | AIが画面を操作して確かめた手順から、e2eのケースを書き起こす。落ちたケースは、意図した画面の変更による操作の壊れなら直し、製品の退行や期待する結果の失敗なら報告する |
+| 保守運用 | `write-api-case` | 公開契約を根拠に、DBや外部APIをモックしたAPIの統合テストのケースを書き、e2eと共有の対応表に載せる |
 | 保守運用 | `create-preview-env` | PRごとのプレビュー環境（Cloudflare WorkersかAmplify）と、社内だけが開けるアクセス制限を作る |
 | 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
 | 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
