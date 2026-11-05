@@ -42,11 +42,11 @@ IDは文字列として書く（`'@case:<id>'`）。コメントの中の`@case:
 
 ## 確認対象の抽出（`inventory.json`）
 
-ソースから確認対象を拾い、プロジェクトの`e2e/ledger/inventory.json`に書いてコミットする。対象の増減が、PRの差分に出るようにするためである。抽出器はプロジェクトの言語で書く。今あるのはSvelteKit用の`e2e-inventory-sveltekit.ts`（bunで動かし、プロジェクトの`svelte/compiler`と`typescript`を使う）だけで、他の構成では必要になったときに同じ出力の形で作る。
+ソースから確認対象を拾い、プロジェクトの`e2e/ledger/inventory.json`に書いてコミットする。対象の増減が、PRの差分に出るようにするためである。抽出器はプロジェクトの言語で書く。今あるのはSvelteKit用の`e2e-inventory-sveltekit.ts`（Node.js 24で動かし、プロジェクトの`svelte/compiler`と`typescript`を使う）だけで、他の構成では必要になったときに同じ出力の形で作る。
 
 ```bash
-bun .claude/bin/e2e-inventory-sveltekit.ts write    # 抽出してinventory.jsonを書く
-bun .claude/bin/e2e-inventory-sveltekit.ts check    # コミット済みのinventory.jsonがソースと一致するか（違えば終了1）
+node .claude/bin/e2e-inventory-sveltekit.ts write    # 抽出してinventory.jsonを書く
+node .claude/bin/e2e-inventory-sveltekit.ts check    # コミット済みのinventory.jsonがソースと一致するか（違えば終了1）
 ```
 
 SvelteKit用の抽出器が拾うもの:
@@ -137,7 +137,7 @@ python3 .claude/bin/verify-map check --skill .claude/skills/verify-<app> [--ledg
 e2eの全件が数分で終わるなら、全件を動かす。長くかかる場合は、変更から選ぶ。
 
 ```bash
-bun .claude/bin/e2e-inventory-sveltekit.ts select --base origin/main
+node .claude/bin/e2e-inventory-sveltekit.ts select --base origin/main
 ```
 
 - 変更したファイルは、`<base>...HEAD`の差分、未コミットの変更、追跡していない新しいファイルを合わせたもの。
@@ -150,6 +150,6 @@ bun .claude/bin/e2e-inventory-sveltekit.ts select --base origin/main
 
 - `inventory.json`の`check`と、軽い検査（`--ledger`と`--tests`。`--results`なし）を、プロジェクトの`check`に足す。ブラウザは起動しない。
 - 抽出器と`verify-map`は、CIでも動かすため、プロジェクトの`.claude/bin/`に置いてコミットする。`harness-install`でハーネスを入れたプロジェクトには既にある。なければ、グローバルのハーネス（`$HOME/.claude/bin/`）から`e2e-inventory-sveltekit.ts`（SvelteKitの場合）と`verify-map`を写す。写したものは、設定集を更新したときに写し直す。
-- 抽出器は`.claude/bin/`に入るので、プロジェクトの`tsconfig.json`の`include`に`.claude/bin/*.ts`を足し、型検査の対象にする。
+- 抽出器は`.claude/bin/`に入るので、プロジェクトの`tsconfig.json`の`include`に`.claude/bin/*.ts`を足し、型検査の対象にする。抽出器は`node:fs`と`node:child_process`を使うので、型検査には`@types/node`が要る。
 - e2eは既存のコマンドで動かし、そのあとで`--results`付きの検査をする。実行の前に前回の結果ファイルを消すか移し、今回の結果だけを読む。
 - CIでは、e2eが失敗しても検査を動かし（`if: ${{ !cancelled() }}`）、e2eの失敗を検査の成功で上書きしない。検査の出力（未実装と例外の一覧を含む）をPRのコメントに載せる。

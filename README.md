@@ -47,7 +47,7 @@ Codexは、Claude Codeから`codex`スキルで作業を頼む先として使い
 |---|---|
 | `uv` | `harness-report`・`harness-install`の実行 |
 | `python3` | Python製hookと`verify-map`の実行 |
-| `bun` | `e2e-inventory-sveltekit.ts`（SvelteKitのe2eの確認対象の抽出）の実行。対象のプロジェクトの`svelte`と`typescript`を使う |
+| Node.js 24 | `e2e-inventory-sveltekit.ts`（SvelteKitのe2eの確認対象の抽出）の実行。TypeScriptを型の除去でそのまま動かす。対象のプロジェクトの`svelte`と`typescript`を使う |
 | `jq` | hookでのJSON処理 |
 | `make` | `stop-check.sh`が`make check`を実行する |
 | `shasum` | `stop-check.sh`・`evidence-check.sh`の状態管理（Linuxでは`perl`の`shasum`が必要な場合がある） |
