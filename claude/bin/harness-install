@@ -29,6 +29,7 @@ SRC = Path(__file__).resolve().parent.parent
 REPO_HOOKS = [
     "block-dangerous-commands.sh",
     "block-main-commit.py",
+    "block-git-chain.py",
     "allow-git-off-main.py",
     "enforce-package-manager.py",
     "block-env-edit.sh",
