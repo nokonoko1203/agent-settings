@@ -132,6 +132,7 @@ Codexでは`pre_tool_use_guard.py`が、特権コマンド（`sudo`など）、�
 | 保守運用 | `correct` | 繰り返す間違いを、効く一番上の層（設計・型・lint・テスト・文書）で防ぐ |
 | 文書 | `sanitize-artifacts` | 生成文書から会話・指示の混入を取り除く |
 | 文書 | `yomiyasu` | AIが生成した日本語を推敲する |
+| 文書 | `write-japanese-work-reports` | 作業メモや下書きから、日本語の業務報告書・進捗報告・作業報告の本文を起草・推敲する |
 
 ## プロジェクトのリポジトリに入れる
 
