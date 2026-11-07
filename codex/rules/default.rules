@@ -24,9 +24,9 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = ["bun", "run"],
+    pattern = ["pnpm", "run"],
     decision = "allow",
-    justification = "Allow running the project scripts with bun run.",
+    justification = "Allow running the project scripts with pnpm run.",
 )
 
 prefix_rule(

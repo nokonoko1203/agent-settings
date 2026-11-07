@@ -28,7 +28,7 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 | 言語 | check |
 |---|---|
 | Rust | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` |
-| TypeScript（bun） | `bun run lint`、`bun run typecheck`、`bun test` |
+| TypeScript（pnpm） | `pnpm run lint`、`pnpm run typecheck`（`tsc --noEmit`、SvelteKitは`svelte-check`）、`pnpm test` |
 | Python（uv） | `uv run ruff check`、`uv run ruff format --check`、`uv run pyright`（または既存の型検査）、`uv run pytest -q` |
 
 検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`も足す（`~/.claude/references/verification-map.md`）。CIでも動かすため、`.claude/bin/`になければ、同文書の「つなぎ方」に従ってリポジトリに入れる。ブラウザを起動しないので速い。
@@ -40,9 +40,9 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 `.github/workflows/check.yml`を作る。`~/.claude/rules/dependency-security.md`に従う。
 
 - `make check`をCIでも実行する。ローカルとCIで同じコマンドを使う。
-- 依存関係のインストールはロックファイルを厳守する（`bun install --frozen-lockfile`、`uv sync --locked`、`cargo test --locked`など）。
+- 依存関係のインストールはロックファイルを厳守する（`pnpm install --frozen-lockfile`、`uv sync --locked`、`cargo test --locked`など）。
 - 依存パッケージの脆弱性監査のjobを含める。
-- Actionはタグではなくコミットハッシュで固定し、タグをコメントで残す。ハッシュは`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`などで現在の値を確認する。
+- actionは使う時点の最新のリリースのタグ（`@vX.Y.Z`）で参照し、`gh actions-lock`（`gh extension install github/gh-actions-lock`）で`.github/workflows/actions.lock`を作ってコミットする。lockfileを使えない場合は、フルのコミットハッシュで固定し、行末に版をコメントで残す（`~/.claude/rules/dependency-security.md`）。
 - `permissions: contents: read`を既定にする。
 
 監査コマンドやActionの使い方は公式資料で現在の仕様を確認する。

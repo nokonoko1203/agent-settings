@@ -3,7 +3,7 @@
 
 Matcher: Bash
 The manager is detected from the nearest lockfile above the working directory.
-Without a lockfile, bun (JavaScript) and uv (Python) are required.
+Without a lockfile, pnpm (JavaScript) and uv (Python) are required.
 One-off runners (npx, bunx, bun x, pnpm dlx, yarn dlx, uvx) are not checked.
 """
 
@@ -28,7 +28,7 @@ PY_LOCKFILES = [
     ("poetry.lock", "poetry"),
     ("Pipfile.lock", "pipenv"),
 ]
-JS_DEFAULT = "bun"
+JS_DEFAULT = "pnpm"
 PY_DEFAULT = "uv"
 
 # Subcommands that install, change dependencies, or run project scripts.
