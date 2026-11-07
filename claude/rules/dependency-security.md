@@ -15,7 +15,7 @@ paths:
 
 # 依存パッケージの安全ルール
 
-- Node.jsはpnpm（10以上。`package.json`の`packageManager`で版を固定する）、Pythonはuvを使う。既に使用中の場合を除きnpm/yarn/bunは避ける。
+- Node.jsはpnpm、Pythonはuvを使う。既に使用中の場合を除きnpm/yarn/bunは避ける。パッケージマネージャーは、使う時点の安定版のうち最新のマイナーバージョン以上にし、プロジェクトで版を固定する（pnpmは`package.json`の`packageManager`）。
 - グローバルインストールは提案しない。単発実行には`pnpm dlx`/`npx`/`uvx`を使う。
 - 公開直後のバージョンをインストールしない。新規プロジェクトでは最小リリース期間（7日）を設定する。pnpmは`pnpm-workspace.yaml`の`minimumReleaseAge: 10080`、uvは`pyproject.toml`の`[tool.uv]`の`exclude-newer = "7 days"`。
 - postinstall/preinstallスクリプトはデフォルトでブロックする。
