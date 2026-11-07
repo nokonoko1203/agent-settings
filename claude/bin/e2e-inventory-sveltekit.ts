@@ -4,7 +4,7 @@
  *
  *   node .claude/bin/e2e-inventory-sveltekit.ts write  [--out e2e/ledger/inventory.json]
  *   node .claude/bin/e2e-inventory-sveltekit.ts check  [--out e2e/ledger/inventory.json]
- *   node .claude/bin/e2e-inventory-sveltekit.ts select --base <ref> [--ledger e2e/ledger] [--tests e2e]
+ *   node .claude/bin/e2e-inventory-sveltekit.ts select --base <ref> [--ledger e2e/ledger] [--tests e2e] [--api-tests src]
  *
  * Run it from the repository root. It reads src/ with the project's own `svelte/compiler`
  * and `typescript`. What it extracts, and how the ledger uses it, is defined in
@@ -474,7 +474,7 @@ function git(args: string[]): string[] {
 	return r.stdout.split('\n').filter(Boolean);
 }
 
-async function select(base: string, ledger: string, testsDir: string): Promise<number> {
+async function select(base: string, ledger: string, testsDir: string, apiTestsDir: string): Promise<number> {
 	const changed = new Set([
 		...git(['diff', '--name-only', `${base}...HEAD`]),
 		...git(['diff', '--name-only', 'HEAD']),
@@ -493,17 +493,19 @@ async function select(base: string, ledger: string, testsDir: string): Promise<n
 	const keysBySource = new Map<string, string[]>();
 	for (const i of c.items) keysBySource.set(i.source, [...(keysBySource.get(i.source) ?? []), i.key]);
 
-	const data = (await readJson(`${ledger}/scenarios.json`)) as { scenarios?: { id: string; status: string; covers: string[] }[] };
+	const data = (await readJson(`${ledger}/scenarios.json`)) as { scenarios?: { id: string; status: string; covers: string[]; runner?: string }[] };
 	const scenarios = data.scenarios ?? [];
 	const testCases = new Map<string, string[]>();
-	for (const f of globFiles(`${testsDir}/**/*.{ts,js}`)) {
+	const apiTests = globFiles(`${apiTestsDir}/**/*.test.{ts,js}`).filter((f) => !f.split('/').includes('node_modules'));
+	for (const f of [...globFiles(`${testsDir}/**/*.{ts,js}`), ...apiTests]) {
 		testCases.set(f, [...readFileSync(f, 'utf8').matchAll(/@case:([a-z][a-z0-9-]*)/g)].map((m) => m[1]));
 	}
 
 	const picked = new Set<string>();
 	const unmapped: string[] = [];
 	for (const file of [...changed].sort()) {
-		if (testCases.has(file)) {
+		// A test file picks its own cases. An API-test folder file without a case (a unit test) is followed like source.
+		if (testCases.get(file)?.length || (testCases.has(file) && !apiTests.includes(file))) {
 			testCases.get(file)!.forEach((id) => picked.add(id));
 			continue;
 		}
@@ -517,11 +519,21 @@ async function select(base: string, ledger: string, testsDir: string): Promise<n
 		cases.forEach((s) => picked.add(s.id));
 	}
 	const status = new Map(scenarios.map((s) => [s.id, s.status]));
+	// Ledgers written before API cases have no runner: those cases are e2e.
+	const runner = new Map(scenarios.map((s) => [s.id, s.runner ?? 'e2e']));
 	const runnable = [...picked].filter((id) => status.get(id) !== 'pending').sort();
 	const pending = [...picked].filter((id) => status.get(id) === 'pending').sort();
+	const e2e = runnable.filter((id) => runner.get(id) !== 'api');
+	const api = runnable.filter((id) => runner.get(id) === 'api');
 	console.log(`変更: ${changed.size}ファイル（${base}...HEAD と作業ツリー）`);
-	console.log(runnable.length ? `ケース: ${runnable.join(', ')}` : 'ケース: なし');
-	if (runnable.length) console.log(`--grep: @case:(${runnable.join('|')})(?![a-z0-9-])`);
+	console.log(e2e.length ? `ケース: ${e2e.join(', ')}` : 'ケース: なし');
+	if (e2e.length) console.log(`--grep: @case:(${e2e.join('|')})(?![a-z0-9-])`);
+	if (api.length) {
+		// Vitest filters tags only when they are declared in its config, so the API cases run by file.
+		const apiFiles = apiTests.filter((f) => testCases.get(f)!.some((id) => api.includes(id))).sort();
+		console.log(`APIのケース: ${api.join(', ')}`);
+		console.log(apiFiles.length ? `APIのテストのファイル: ${apiFiles.join(' ')}` : 'APIのテストのファイル: なし（テストがまだない）');
+	}
 	if (pending.length) console.log(`未実装のケース（動かせない）: ${pending.join(', ')}`);
 	if (unmapped.length) {
 		console.log('対応表から引けない変更（利用先を調べ、関係するケースを足して動かす）:');
@@ -543,7 +555,7 @@ async function main(): Promise<number> {
 	const [command, ...args] = process.argv.slice(2);
 	try {
 		if (command === 'write' || command === 'check') return await writeOrCheck(command, option(args, '--out', 'e2e/ledger/inventory.json'));
-		if (command === 'select') return await select(option(args, '--base'), option(args, '--ledger', 'e2e/ledger'), option(args, '--tests', 'e2e'));
+		if (command === 'select') return await select(option(args, '--base'), option(args, '--ledger', 'e2e/ledger'), option(args, '--tests', 'e2e'), option(args, '--api-tests', 'src'));
 		throw new CannotRun('使い方: write | check | select --base <ref>');
 	} catch (e) {
 		if (!(e instanceof CannotRun)) throw e;

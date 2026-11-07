@@ -31,7 +31,7 @@ lint、型検査、高速なテストを順に実行し、どれかが失敗し�
 | TypeScript（bun） | `bun run lint`、`bun run typecheck`、`bun test` |
 | Python（uv） | `uv run ruff check`、`uv run ruff format --check`、`uv run pyright`（または既存の型検査）、`uv run pytest -q` |
 
-検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`も足す（`~/.claude/references/verification-map.md`）。CIでも動かすため、`.claude/bin/`になければ、同文書の「つなぎ方」に従ってリポジトリに入れる。ブラウザを起動しないので速い。
+検証スキルの機能一覧に確認手段の札があるプロジェクトでは、`python3 .claude/bin/verify-map check --skill <検証スキル>`をcheckに足す。e2eの対応表があれば、抽出器の`check`と、`--ledger`・`--tests`（APIのケースがあれば`--api-tests`）も足す（`~/.claude/references/verification-map.md`）。CIでも動かすため、`.claude/bin/`になければ、同文書の「つなぎ方」に従ってリポジトリに入れる。ブラウザを起動しないので速い。
 
 `Makefile`がなく、作る理由もない場合は`.claude/check.sh`（実行権限付き、`set -euo pipefail`）にする。作成後に実行し、現状で通ることを確認する。通らない場合は、既存の失敗として一覧を報告し、勝手に直さない。
 

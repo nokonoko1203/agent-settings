@@ -17,8 +17,9 @@
 - e2eはCIの中でモックとアプリを起動して動かす。Playwrightの`webServer`で、モックとアプリの起動と準備完了の判定を書く。本番の資格情報は渡さず、モックの資格情報（ダミーの値）はワークフローに直接書いてよい
 - ブラウザは`bunx playwright install --with-deps chromium`で入れる
 - 失敗したら、スクリーンショットとトレースをartifactに上げる。成功しても、主要な画面のスクリーンショットはartifactに上げる
-- e2eの前に、抽出器の`check`と、`verify-map`の軽い検査（`--ledger`・`--tests`）を動かす
-- e2eのあとに、`python3 .claude/bin/verify-map check --skill <検証スキル> --results <PlaywrightのJSON>`（対応表があれば`--ledger`・`--tests`も）で、ケースIDと結果を照合する。検査の出力は、未実装と例外の一覧ごとPRのコメントに載せる。e2eが失敗しても動かす（`if: ${{ !cancelled() }}`）。Pythonは標準ライブラリだけなので、uvやsetup-pythonは要らない
+- e2eの前に、抽出器の`check`と、`verify-map`の軽い検査（`--ledger`・`--tests`。APIのケースがあれば`--api-tests`も）を動かす
+- APIのケースがあれば、e2eの前に`vitest run --retry=0 --reporter=default --reporter=json --outputFile=<JSON>`で全件を動かす。ブラウザもモックのサーバーも要らない
+- e2eのあとに、`python3 .claude/bin/verify-map check --skill <検証スキル> --results <PlaywrightのJSON>`（対応表があれば`--ledger`・`--tests`も。APIのケースがあれば`--api-tests`・`--api-results <VitestのJSON>`も）で、ケースIDと結果を照合する。検査の出力は、未実装と例外の一覧ごとPRのコメントに載せる。e2eが失敗しても動かす（`if: ${{ !cancelled() }}`）。Pythonは標準ライブラリだけなので、uvやsetup-pythonは要らない
 - 結果は、通った・落ちた・不安定・スキップの数を分けて数え、結果のファイルがなければ「結果なし」と書く。集計とartifactの保存は、e2eが失敗しても動かし（`if: ${{ !cancelled() }}`）、集計の成功でe2eの失敗を上書きしない
 - 結果とartifactへのリンクを、PRのコメントにする（下の「コメントの更新」）。フォーク元からのPRでは`GITHUB_TOKEN`に書き込み権限がなくコメントできないので、コメントのステップは`if: github.event.pull_request.head.repo.full_name == github.repository`で絞り、結果はジョブのサマリー（`$GITHUB_STEP_SUMMARY`）にも書く
 
