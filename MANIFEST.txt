@@ -88,6 +88,7 @@
 ./claude/skills/why/references/sources/notion.md
 ./claude/skills/why/references/sources/slack.md
 ./claude/skills/write-e2e-case/SKILL.md
+./claude/skills/write-japanese-work-reports/SKILL.md
 ./claude/skills/yomiyasu/.codex-plugin/plugin.json
 ./claude/skills/yomiyasu/LICENSE
 ./claude/skills/yomiyasu/SKILL.md
