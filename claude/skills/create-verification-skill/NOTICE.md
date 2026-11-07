@@ -6,7 +6,7 @@
 - 取得元のミラー: https://github.com/backnotprop/pstack （commit `fce11a3442cfd59a21136de0b7010474c6a10ef5`）
 - 元のファイル: `skills/create-verification-skill/SKILL.md`、`references/feature-map-example/`（例は原文のまま）
 
-主な変更: Claude Codeのパスに限定。ビルドの修正と新しい依存の追加をユーザーの承認制にした。シークレットの扱い（`op run`、`.env`を作らない）、bun・uvの利用を追加。機能一覧の見出しに日本語を追加。証拠の既定の置き場所を`.tmp/evidence/<task>/`にし、形式を`~/.claude/references/evidence.md`に揃えた。
+主な変更: Claude Codeのパスに限定。ビルドの修正と新しい依存の追加をユーザーの承認制にした。シークレットの扱い（`op run`、`.env`を作らない）、pnpm・uvの利用を追加。機能一覧の見出しに日本語を追加。証拠の既定の置き場所を`.tmp/evidence/<task>/`にし、形式を`~/.claude/references/evidence.md`に揃えた。
 
 ## pstackのライセンス
 

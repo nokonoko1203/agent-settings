@@ -2,12 +2,12 @@
 
 ## 共通の決まり
 
-- actionは、使う時点の最新のリリースを確かめ、フルのコミットハッシュで固定する。行末に版をコメントで残す。ハッシュは`git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>'`で引き、annotated tagなら`^{}`の付いた行を使う
+- actionは、使う時点の最新のリリースを確かめ、タグ（`@vX.Y.Z`）で参照する。`gh actions-lock`で`.github/workflows/actions.lock`を作り直し、ワークフローと同じPRでコミットする。lockfileを使えない場合は、フルのコミットハッシュで固定し、行末に版をコメントで残す。ハッシュは`git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>'`で引き、annotated tagなら`^{}`の付いた行を使う
 - 新しく作るワークフローのトリガーは`pull_request`にする。既存のワークフローに足すときは、既存のトリガー（`push`、`merge_group`など）を残し、足すジョブやステップの実行条件を別に書く。どちらでも`pull_request_target`は使わない。フォーク元からのPRではsecretsを使うジョブを動かさない
 - `permissions`はジョブごとに必要なものだけにする（例: `contents: read`、PRにコメントするジョブだけ`pull-requests: write`）
 - secretsを使うジョブには、用途ごとのEnvironment（プレビューなら`preview`）を付け、値はEnvironmentのsecretsから読む。e2eのCIはsecretsを使わない
-- 依存はロックファイルどおりに入れる（`bun install --frozen-lockfile`、`uv sync --locked`など）
-- 依存の脆弱性の監査を入れる（CLAUDE.mdの規則）。既存のCIに監査があれば残し、なければ使っているパッケージマネージャーの監査を足す（例: `bun audit`。Pythonは、ロックファイルから書き出した依存の一覧を`uvx pip-audit -r <一覧>`に渡す。引数なしの`uvx pip-audit`はツールの隔離環境を検査するだけで、プロジェクトの依存を見ない）。使う時点で、そのコマンドが今の版にあるかを確かめる
+- 依存はロックファイルどおりに入れる（`pnpm install --frozen-lockfile`、`uv sync --locked`など）
+- 依存の脆弱性の監査を入れる（CLAUDE.mdの規則）。既存のCIに監査があれば残し、なければ使っているパッケージマネージャーの監査を足す（例: `pnpm audit`。Pythonは、ロックファイルから書き出した依存の一覧を`uvx pip-audit -r <一覧>`に渡す。引数なしの`uvx pip-audit`はツールの隔離環境を検査するだけで、プロジェクトの依存を見ない）。使う時点で、そのコマンドが今の版にあるかを確かめる
 - 同じPRの古い実行は`concurrency`（`group: <workflow>-${{ github.event.pull_request.number }}`、`cancel-in-progress: true`）で止める
 
 ## CI（監査、型検査、テスト、e2e）
@@ -15,7 +15,7 @@
 1つのワークフローで、依存の監査、リポジトリの型検査とテストを動かし、続けてe2eを動かす。
 
 - e2eはCIの中でモックとアプリを起動して動かす。Playwrightの`webServer`で、モックとアプリの起動と準備完了の判定を書く。本番の資格情報は渡さず、モックの資格情報（ダミーの値）はワークフローに直接書いてよい
-- ブラウザは`bunx playwright install --with-deps chromium`で入れる
+- ブラウザは`pnpm exec playwright install --with-deps chromium`で入れる
 - 失敗したら、スクリーンショットとトレースをartifactに上げる。成功しても、主要な画面のスクリーンショットはartifactに上げる
 - e2eの前に、抽出器の`check`と、`verify-map`の軽い検査（`--ledger`・`--tests`。APIのケースがあれば`--api-tests`も）を動かす
 - APIのケースがあれば、e2eの前に`vitest run --retry=0 --reporter=default --reporter=json --outputFile=<JSON>`で全件を動かす。ブラウザもモックのサーバーも要らない

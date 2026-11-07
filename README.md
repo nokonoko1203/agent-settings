@@ -97,7 +97,7 @@ jq -s '.[0] * .[1]' ~/.claude/settings.json claude/settings.json > /tmp/settings
 | PreToolUse（Bash） | `block-main-commit.py` | mainへの直接コミットを止める |
 | PreToolUse（Bash） | `block-git-chain.py` | 1回の呼び出しで2つ以上のgitを実行するコマンドを止める（`cd <dir> && git …`は通す） |
 | PreToolUse（Bash） | `allow-git-off-main.py` | main以外のブランチでのgit操作と、mainからの新しいブランチの作成を自動で許可する |
-| PreToolUse（Bash） | `enforce-package-manager.py` | ロックファイルと違うパッケージマネージャーを止める（ロックファイルがなければbun・uv） |
+| PreToolUse（Bash） | `enforce-package-manager.py` | ロックファイルと違うパッケージマネージャーを止める（ロックファイルがなければpnpm・uv） |
 | PreToolUse・PostToolUse（Bash） | `xlsx-guard.py` | コマンドが書き換えた.xlsxを検証する |
 | PreToolUse（Edit・Write） | `block-env-edit.sh` | `.env`の作成・編集を止める |
 | Stop | `stop-check.sh` | `make check`を実行し、落ちたら直させる（3回まで） |
