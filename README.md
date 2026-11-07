@@ -95,6 +95,7 @@ jq -s '.[0] * .[1]' ~/.claude/settings.json claude/settings.json > /tmp/settings
 | すべて | `run-global.sh` | 下の一部のhookを包む。起動したディレクトリに`harness-install`で入れたハーネスの写し（`.claude/harness-version`）があれば、グローバルのhookは動かさない（プロジェクトのhookが動くため） |
 | PreToolUse（Bash） | `block-dangerous-commands.sh` | `rm -rf`などの取り返しのつかないコマンドを止める |
 | PreToolUse（Bash） | `block-main-commit.py` | mainへの直接コミットを止める |
+| PreToolUse（Bash） | `block-git-chain.py` | 1回の呼び出しで2つ以上のgitを実行するコマンドを止める（`cd <dir> && git …`は通す） |
 | PreToolUse（Bash） | `allow-git-off-main.py` | main以外のブランチでのgit操作と、mainからの新しいブランチの作成を自動で許可する |
 | PreToolUse（Bash） | `enforce-package-manager.py` | ロックファイルと違うパッケージマネージャーを止める（ロックファイルがなければbun・uv） |
 | PreToolUse・PostToolUse（Bash） | `xlsx-guard.py` | コマンドが書き換えた.xlsxを検証する |

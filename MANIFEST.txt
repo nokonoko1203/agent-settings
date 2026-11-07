@@ -10,6 +10,7 @@
 ./claude/hooks/allow-git-off-main.py
 ./claude/hooks/block-dangerous-commands.sh
 ./claude/hooks/block-env-edit.sh
+./claude/hooks/block-git-chain.py
 ./claude/hooks/block-main-commit.py
 ./claude/hooks/check-reply-language.py
 ./claude/hooks/check-reply-links.py

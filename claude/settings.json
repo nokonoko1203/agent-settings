@@ -81,6 +81,10 @@
           },
           {
             "type": "command",
+            "command": "~/.claude/hooks/run-global.sh block-git-chain.py"
+          },
+          {
+            "type": "command",
             "command": "~/.claude/hooks/run-global.sh enforce-package-manager.py"
           },
           {
